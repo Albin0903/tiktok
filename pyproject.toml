@@ -1,0 +1,18 @@
+[project]
+name = "verite-fiscale-2027"
+version = "0.1.0"
+description = "Monorepo VeriteFiscale-2027 — Micro-simulation socio-fiscale OpenFisca-France (Windows 11 ARM64 natif)"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "openfisca-france>=177.0.0",
+    "polars>=2.0.0",
+    "duckdb>=2.0.0",
+    "httpx>=0.28.0",
+    "pydantic>=2.10.0",
+    "pytest>=9.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "engine"]
+testpaths = ["engine/tests"]
+addopts = "-ra"

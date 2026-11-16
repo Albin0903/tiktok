@@ -1,14 +1,14 @@
 {
-  "measure_id": "plf2027-demo-abatpen-001",
-  "title": "Plafonnement ou suppression de l'abattement fiscal de 10 % sur les pensions de retraite",
+  "measure_id": "plf2027-art3-abatpen-3000",
+  "title": "PLF 2027 n° 3210, art. 3 : sous-plafond de 3 000 € de l'abattement de 10 % sur les seules pensions de retraite",
   "source_document": {
-    "name": "Exemples de pistes PLF / Rapports CPO & IPP (CGI art. 158-5-a)",
+    "name": "PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026 ; rejeté AN 04/11/2026 ; examen Sénat à partir du 20/11/2026) & CGI art. 158, 5-a / Brochure pratique DGFiP IR 2026",
     "url": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000048801686",
     "page": 1,
-    "exact_quote": "Les pensions et rentes viagères font l'objet d'un abattement de 10 %, avec un minimum et un plafond annuels par foyer fiscal."
+    "exact_quote": "Le plafond annuel de l'abattement de 10 % prévu au a du 5 de l'article 158 du CGI (4 439 € sur les revenus 2025, min 454 € par pensionné) est ramené à 3 000 € par foyer fiscal pour les seules pensions de retraite ; les pensions alimentaires et d'invalidité restent soumises au plafond de droit commun."
   },
-  "certainty_level": "green",
-  "certainty_label": "CERTITUDE LÉGISLATIVE / CALCUL DIRECT",
+  "calc_certainty": "green",
+  "legal_status": "projet_de_loi_en_navette",
   "openfisca_mapping": {
     "parameter_path": "impot_revenu.calcul_revenus_imposables.deductions.abatpen",
     "variables_impacted": [
@@ -17,23 +17,29 @@
       "rni",
       "impot_revenu_restant_a_payer",
       "rfr",
+      "csg_deductible_retraite",
+      "csg_imposable_retraite",
       "revenu_disponible"
     ],
+    "methodological_limit_csg_smoothing": "Le moteur natif openfisca-france évalue la bascule de taux CSG retraites en année N à partir du seul rfr(N-2), sans modéliser la règle Urssaf/Cnav (CSS art. L136-8, III bis) de franchissement des seuils pendant 2 années consécutives (N-2 et N-3).",
     "scenarios": [
       {
         "id": "plafond_3000",
-        "label": "Plafonnement à 3 000 € par foyer fiscal",
+        "label": "PLF 2027 art. 3 : sous-plafond à 3 000 € par foyer fiscal (pensions de retraite seules)",
+        "calc_certainty": "green",
+        "legal_status": "projet_de_loi_en_navette",
         "changes": {
-          "abatpen.max": 3000
+          "indu_plaf_abat_pen.max_retraite": 3000.0
         }
       },
       {
-        "id": "suppression_10pct",
-        "label": "Suppression totale de l'abattement de 10 %",
+        "id": "suppression_10pct_retraites_seules",
+        "label": "Scénario alternatif : suppression de l'abattement de 10 % (retraites seules, périmètre constant)",
+        "calc_certainty": "green",
+        "legal_status": "proposition_programme",
         "changes": {
-          "abatpen.taux": 0.0,
-          "abatpen.min": 0,
-          "abatpen.max": 0
+          "abatpen_retraites_seules.taux": 0.0,
+          "abatpen_retraites_seules.min": 0.0
         }
       }
     ]

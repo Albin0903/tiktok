@@ -22,9 +22,12 @@ En France, le **Revenu Fiscal de Référence (RFR) de l'année $N-2$** détermin
 - Le taux de **CSG applicable aux pensions de retraite** en année $N$ (`0 %`, `3,8 %`, `6,6 %` médian ou `8,3 %` taux plein) ainsi que la **CASA** (`0,3 %`).
 - Les bases de ressources historiques de certaines prestations.
 
-**Règle d'implémentation :** toute simulation évalue les années $N-4 \dots N$ (ex: `2021..2025`) avec `simulation.max_spiral_loops = 3`. Cela permet de distinguer :
-1. **L'effet immédiat Année $N$** (ex: hausse d'IR dès l'année d'application de la réforme).
-2. **L'effet en régime permanent ($N+2$)** lorsqu'une hausse d'assiette imposable fait basculer un retraité au-dessus d'un seuil de RFR pour la CSG (effet de falaise CSG).
+**Règle d'implémentation :** toute simulation évalue les années $N-4 \dots N$ (ex: `2021..2025`) avec `simulation.max_spiral_loops = 3`. Cela permet de distinguer explicitement deux horizons (`horizon: "annee_1" | "regime_permanent"`) :
+1. **L'effet immédiat Année 1 (`annee_1`)** : la réforme s'applique uniquement sur l'année courante $N$ (`2025-01-01`). Le `rfr(N-2)` (`2023`) reste inchangé : aucune bascule immédiate de tranche CSG n'intervient.
+2. **L'effet en régime permanent (`regime_permanent`)** : la réforme s'applique sur toute la fenêtre historique $N-4 \dots N$ (`2021-01-01`), mettant en évidence lorsqu'une hausse d'assiette imposable fait basculer un retraité au-dessus d'un seuil de RFR pour la CSG (effet de falaise CSG, ex. `26 004 €` pour 1 part en 2025).
+
+> **Limite documentée du moteur natif `openfisca-france` (lissage CSG 2 ans) :**
+> En droit réel (CSS art. L136-8, III bis / règles Urssaf-Cnav), le franchissement à la hausse d'un seuil de RFR n'entraîne l'application du taux médian (`6,6 %`) ou normal (`8,3 %`) qu'après **deux années consécutives de dépassement (`N-2` et `N-3`)**. Or `openfisca-france` détermine nativement la tranche de CSG retraites de l'année $N$ à partir du seul `rfr(period.n_2)` sur une année unique. Les simulations en `regime_permanent` représentent donc l'état stationnaire après deux exercices pleins d'application de la réforme.
 
 ---
 

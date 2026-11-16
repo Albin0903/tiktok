@@ -27,9 +27,12 @@ if (-not $codexCmd) {
 $reviewPrompt = @"
 Effectue une revue fiscale et technique rigoureuse du fichier '$TargetFile' selon AGENTS.md :
 1. Verifie les variables et parametres openfisca_france utilises (entite Individu vs FoyerFiscal vs Menage, periode MONTH vs YEAR, convention de signe IR/CSG negative).
-2. Verifie la gestion de la boucle temporelle N-2 (RFR -> taux CSG retraites, max_spiral_loops) et les effets de seuil / decote / plafonnement foyer fiscal.
-3. Verifie la presence des commentaires '# SOURCE: ...' sur chaque constante ou bareme.
-4. Signale tout bug fiscal silencieux, cas limite manquant ou divergence potentielle avec impots.gouv.fr / LexImpact.
+2. Verifie le perimetre exact des pensions (retraite vs pensions alimentaires / invalidite), la separation horizon 'annee_1' vs 'regime_permanent', la boucle N-2 (max_spiral_loops) et la limite lissage CSG 2 ans.
+3. Verifie l'indexation explicite par identifiants d'entites, la presence des commentaires '# SOURCE: ...' sur chaque constante/bareme et les attributs calc_certainty / legal_status conformes a DESIGN.md.
+4. Contrainte d'execution en sandbox lecture seule (-s read-only) : n'utilise PAS 'uv run' (echec sur verrou du cache global uv). Execute directement les tests et scripts via le Python du venv local :
+   - engine\.venv\Scripts\python.exe -m pytest -v engine/tests/
+   - engine\.venv\Scripts\python.exe -m engine.reforms.demo_plf2027_retraites
+5. Signale tout bug fiscal silencieux, cas limite manquant ou divergence potentielle avec impots.gouv.fr / LexImpact.
 "@
 
 if ($DryRun) {
