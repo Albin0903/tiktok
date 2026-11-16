@@ -35,7 +35,7 @@ Règle exacte et implémentation du lissage CSG / CASA (CSS art. L. 136-8, III) 
 
 SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (Article 3 modifiant CGI art. 158, 5-a ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026).
 SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : abattement 10 %, min 454 € par pensionné, plafond 4 439 € par foyer fiscal).
-SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 1 §2 « Mesure de lissage » p. 4-5 & Annexe 2 « Barème 2025 métropole » p. 7 : seuils RFR 2023 pour 1 part = 12 817 € / 16 755 € / 26 004 €).
+SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (document de 6 pages : Annexe 1 §2 « Mesure de lissage » & Annexes 2-3 « Barèmes 2025 métropole » : seuils RFR 2023 pour 1 part = 12 817 € / 16 755 € / 26 004 €).
 """
 
 from __future__ import annotations
@@ -67,10 +67,10 @@ SuppressionScope = Literal["retraites_seules", "global_158_5_a"]
 CalcCertainty = Literal["green", "yellow", "red"]
 LegalStatus = Literal["en_vigueur", "projet_de_loi_en_navette", "proposition_programme"]
 
-# SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Année d'imposition de référence 2025 et fenêtre N-4..N pour RFR N-2 / N-3)
+# SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Année d'imposition de référence 2025)
 REFERENCE_YEAR = "2025"
-# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 1 §2 p. 4-5 : historique N-4..N requis pour RFR N-2 et N-3)
-HISTORY_YEARS = ("2021", "2022", "2023", "2024", "2025")
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 1 §2 : lissage applicable depuis 2019 exigeant RFR N-3 et N-2 -> fenêtre 2016..2025)
+HISTORY_YEARS = ("2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025")
 # SOURCE: OpenFisca-France v177.0.0 — boucle récursive csg_deductible_retraite(N) <-> rfr(N-2) <-> retraite_imposable(N-2)
 DEFAULT_MAX_SPIRAL_LOOPS = 3
 
@@ -83,11 +83,11 @@ ABATPEN_MAX_2025 = 4439.0
 # SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (Article 3 modifiant CGI art. 158, 5-a : sous-plafond 3 000 € pensions de retraite)
 PLAFOND_ABATPEN_RETRAITE_3000 = 3000.0
 
-# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 2 « Barème 2025 métropole » p. 7 : seuil d'exonération RFR 2023 pour 1 part = 12 817 €)
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexes 2-3 « Barème 2025 métropole » : seuil d'exonération RFR 2023 pour 1 part = 12 817 €)
 CSG_SEUIL_EXO_1_PART_2025 = 12817.0
-# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 2 « Barème 2025 métropole » p. 7 : seuil taux réduit 3,8 % -> médian 6,6 % RFR 2023 pour 1 part = 16 755 €)
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexes 2-3 « Barème 2025 métropole » : seuil taux réduit 3,8 % -> médian 6,6 % RFR 2023 pour 1 part = 16 755 €)
 CSG_SEUIL_MEDIAN_1_PART_2025 = 16755.0
-# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 2 « Barème 2025 métropole » p. 7 : seuil taux médian 6,6 % -> plein 8,3 % RFR 2023 pour 1 part = 26 004 €)
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexes 2-3 « Barème 2025 métropole » : seuil taux médian 6,6 % -> plein 8,3 % RFR 2023 pour 1 part = 26 004 €)
 CSG_SEUIL_PLEIN_1_PART_2025 = 26004.0
 
 # SOURCE: Code du travail art. L3231-2 & Décret n° 2024-951 du 23/10/2024, https://www.legifrance.gouv.fr/loda/id/JORFTEXT000050385094 (SMIC mensuel brut 1 801,80 € x 12)
@@ -99,6 +99,7 @@ def horizon_to_start_date(horizon: HorizonMode) -> str:
     if horizon == "annee_1":
         return f"{REFERENCE_YEAR}-01-01"
     if horizon == "regime_permanent":
+        # En régime permanent, la réforme s'applique sur toute la fenêtre historique N-4..N (2016..2025).
         return f"{HISTORY_YEARS[0]}-01-01"
     raise ValueError(f"Horizon inconnu : {horizon!r}")
 
@@ -106,11 +107,13 @@ def horizon_to_start_date(horizon: HorizonMode) -> str:
 def _compute_csg_retraite_masks(individu: Any, period: Any, parameters: Any) -> tuple[Any, Any, Any, Any]:
     """Calcule les 4 masques de taux CSG retraites conformes à CSS art. L. 136-8, III.
 
-    Corrige deux écarts d'OpenFisca-France 177.0.0 natif :
+    Corrige deux écarts d'OpenFisca-France 177.0.0 natif depuis 2019 :
       1. Borne exacte du taux plein : ``rfr >= seuil_rfr3`` (26 004 € pour 1 part -> 8,3 %).
-      2. Lissage sur 2 ans (pour N >= 2024 où N-3 >= 2021 est renseigné) : un foyer dont
-         ``RFR(N-3) <= seuil_rfr2(N-1)`` reste au taux réduit (3,8 %) et exonéré de CASA
-         lors du premier dépassement de ``seuil_rfr2(N)``.
+      2. Lissage sur 2 ans (applicable depuis 2019, CSS art. L. 136-8, III & Instruction DSS
+         du 04/12/2024 Annexe 1 §2) : compare ``RFR(N-3)`` et ``RFR(N-2)`` au **seuil de
+         l'année N** (``seuils.seuil_rfr2`` avec les ``nbptr`` propres à chaque année) ; si
+         ``RFR(N-3) <= seuil_rfr2(N, nbptr_N_3)``, le pensionné reste au taux réduit (3,8 %)
+         et exonéré de CASA lors du premier dépassement en ``N-2``.
     """
     rfr_n_2 = individu.foyer_fiscal("rfr", period=period.n_2)
     nbptr_n_2 = individu.foyer_fiscal("nbptr", period=period.n_2)
@@ -126,20 +129,16 @@ def _compute_csg_retraite_masks(individu: Any, period: Any, parameters: Any) -> 
     est_med = (rfr_n_2 > seuil_red) & (rfr_n_2 < seuil_plein)
     est_plein = rfr_n_2 >= seuil_plein
 
-    if period.start.year >= 2024:
-        period_n_1 = period.offset(-1, "year")
-        period_n_3 = period_n_1.n_2
-        rfr_n_3 = individu.foyer_fiscal("rfr", period=period_n_3)
-        nbptr_n_3 = individu.foyer_fiscal("nbptr", period=period_n_3)
-        seuils_prev = parameters(period_n_1).prelevements_sociaux.contributions_sociales.csg.remplacement.seuils
-        seuil_red_prev = (
-            seuils_prev.seuil_rfr2.seuil_rfr2 + (nbptr_n_3 - 1) * 2 * seuils_prev.seuil_rfr2.demi_part_suppl_rfr2
-        )
-        # CSS art. L. 136-8, III : maintien à 3,8 % (et hors CASA) si taux <= 3,8 % en N-1
-        lissage_actif = (rfr_n_3 <= seuil_red_prev) & (est_med | est_plein)
-        est_red = est_red | lissage_actif
-        est_med = est_med & not_(lissage_actif)
-        est_plein = est_plein & not_(lissage_actif)
+    # Lissage applicable sur toute la période >= 2019 : comparaison de RFR(N-3) au seuil de l'année N
+    period_n_3 = period.offset(-1, "year").n_2
+    rfr_n_3 = individu.foyer_fiscal("rfr", period=period_n_3)
+    nbptr_n_3 = individu.foyer_fiscal("nbptr", period=period_n_3)
+    seuil_red_n_3 = seuils.seuil_rfr2.seuil_rfr2 + (nbptr_n_3 - 1) * 2 * seuils.seuil_rfr2.demi_part_suppl_rfr2
+
+    lissage_actif = (rfr_n_3 <= seuil_red_n_3) & (est_med | est_plein)
+    est_red = est_red | lissage_actif
+    est_med = est_med & not_(lissage_actif)
+    est_plein = est_plein & not_(lissage_actif)
 
     return est_exo, est_red, est_med, est_plein
 
@@ -458,39 +457,39 @@ def build_retiree_households_payload() -> tuple[dict[str, Any], list[HouseholdSp
         "individus": {
             "ind_modeste_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(14400.0),
             },
             "ind_median_63_1": {
                 "date_naissance": {"ETERNITY": "1962-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(28800.0),
             },
             "ind_median_68_1": {
                 "date_naissance": {"ETERNITY": "1957-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(28800.0),
             },
             "ind_inter_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(38400.0),
             },
             "ind_aise_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(54000.0),
             },
             "ind_couple_aise_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
                 "statut_marital": _const_years("marie"),
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(36000.0),
             },
             "ind_couple_aise_2": {
                 "date_naissance": {"ETERNITY": "1959-01-01"},
                 "statut_marital": _const_years("marie"),
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(30000.0),
             },
         },
@@ -552,19 +551,19 @@ def build_active_control_households_payload() -> tuple[dict[str, Any], list[Hous
         "individus": {
             "ind_smic_1": {
                 "date_naissance": {"ETERNITY": "1995-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (SMIC 2025, non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (SMIC 2025, non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(SMIC_ANNUEL_BRUT_2025),
             },
             "ind_c2e_1": {
                 "date_naissance": {"ETERNITY": "1986-01-01"},
                 "statut_marital": _const_years("marie"),
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(30000.0),
             },
             "ind_c2e_2": {
                 "date_naissance": {"ETERNITY": "1988-01-01"},
                 "statut_marital": _const_years("marie"),
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(24000.0),
             },
             "ind_c2e_enf1": {"date_naissance": {"ETERNITY": "2015-05-01"}},
@@ -572,24 +571,24 @@ def build_active_control_households_payload() -> tuple[dict[str, Any], list[Hous
             "ind_cadre_1": {
                 "date_naissance": {"ETERNITY": "1984-01-01"},
                 "categorie_salarie": _const_years("prive_cadre"),
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(60000.0),
             },
             "ind_pa_1": {
                 "date_naissance": {"ETERNITY": "1980-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "pensions_alimentaires_percues": _const_years(38400.0),
             },
             "ind_inv_1": {
                 "date_naissance": {"ETERNITY": "1973-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "pensions_invalidite": _const_years(38400.0),
             },
             "ind_mixte_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(36000.0),
-                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
+                # SOURCE: VeriteFiscale-2027 (Interne, 2026) — Cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "pensions_alimentaires_percues": _const_years(10000.0),
             },
         },

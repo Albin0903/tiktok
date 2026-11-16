@@ -233,6 +233,74 @@ def test_csg_exact_boundary_26004_taux_plein() -> None:
     assert _run_at_rfr2023(26004.0) == pytest.approx(28800.0 * 0.083, abs=0.2)
 
 
+def test_csg_smoothing_uses_year_n_threshold_for_rfr_n_3() -> None:
+    """Non-régression [P1] : RFR(N-3) est comparé au seuil de l'année N (16 755 € en 2025).
+
+    Cas exact : 1 part, RFR 2022 = 16 300 € (> 15 988 € de N-1 mais <= 16 755 € de 2025),
+    RFR 2023 = 18 000 €, retraite brute 2025 = 18 000 € -> CSG 2025 = 684 € (3,8 %) et CASA = 0 €.
+    """
+    tbs = get_tax_benefit_system()
+    sys_exact = LoiEnVigueurBaseline(tbs, horizon="regime_permanent")
+    payload = {
+        "individus": {
+            "ind_n3": {
+                "date_naissance": {"ETERNITY": "1962-01-01"},
+                "retraite_brute": {"2025": 18000.0},
+            }
+        },
+        "foyers_fiscaux": {
+            "ff_n3": {
+                "declarants": ["ind_n3"],
+                "rfr": {"2022": 16300.0, "2023": 18000.0},
+            }
+        },
+        "familles": {"fam_n3": {"parents": ["ind_n3"]}},
+        "menages": {"men_n3": {"personne_de_reference": ["ind_n3"]}},
+    }
+    sim = SimulationBuilder().build_from_entities(sys_exact, payload)
+    sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
+    csg_2025 = float(
+        -(sim.calculate_add("csg_deductible_retraite", "2025")[0] + sim.calculate_add("csg_imposable_retraite", "2025")[0])
+    )
+    casa_2025 = float(-sim.calculate_add("casa", "2025")[0])
+    assert csg_2025 == pytest.approx(684.0, abs=0.2)
+    assert casa_2025 == 0.0
+
+
+def test_csg_smoothing_active_before_2024() -> None:
+    """Non-régression [P2] : le lissage CSG/CASA s'applique aussi avant 2024 (ex. en 2023).
+
+    Cas exact : 1 part, RFR 2020 = 14 000 €, RFR 2021 = 16 000 €, retraite brute 2023 = 18 000 €
+    -> CSG 2023 = 684 € (3,8 %) et CASA 2023 = 0 €.
+    """
+    tbs = get_tax_benefit_system()
+    sys_exact = LoiEnVigueurBaseline(tbs, horizon="regime_permanent")
+    payload = {
+        "individus": {
+            "ind_2023": {
+                "date_naissance": {"ETERNITY": "1960-01-01"},
+                "retraite_brute": {"2023": 18000.0},
+            }
+        },
+        "foyers_fiscaux": {
+            "ff_2023": {
+                "declarants": ["ind_2023"],
+                "rfr": {"2020": 14000.0, "2021": 16000.0},
+            }
+        },
+        "familles": {"fam_2023": {"parents": ["ind_2023"]}},
+        "menages": {"men_2023": {"personne_de_reference": ["ind_2023"]}},
+    }
+    sim = SimulationBuilder().build_from_entities(sys_exact, payload)
+    sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
+    csg_2023 = float(
+        -(sim.calculate_add("csg_deductible_retraite", "2023")[0] + sim.calculate_add("csg_imposable_retraite", "2023")[0])
+    )
+    casa_2023 = float(-sim.calculate_add("casa", "2023")[0])
+    assert csg_2023 == pytest.approx(684.0, abs=0.2)
+    assert casa_2023 == 0.0
+
+
 def test_abat_spe_senior_65_interaction_and_abatpen_bounds(
     suite_regime_permanent: dict[str, dict[str, dict[str, Any]]],
 ) -> None:
