@@ -1,0 +1,41 @@
+{
+  "measure_id": "plf2027-demo-abatpen-001",
+  "title": "Plafonnement ou suppression de l'abattement fiscal de 10 % sur les pensions de retraite",
+  "source_document": {
+    "name": "Exemples de pistes PLF / Rapports CPO & IPP (CGI art. 158-5-a)",
+    "url": "https://www.legifrance.gouv.fr/codes/article_lc/LEGIARTI000048801686",
+    "page": 1,
+    "exact_quote": "Les pensions et rentes viagères font l'objet d'un abattement de 10 %, avec un minimum et un plafond annuels par foyer fiscal."
+  },
+  "certainty_level": "green",
+  "certainty_label": "CERTITUDE LÉGISLATIVE / CALCUL DIRECT",
+  "openfisca_mapping": {
+    "parameter_path": "impot_revenu.calcul_revenus_imposables.deductions.abatpen",
+    "variables_impacted": [
+      "revenu_assimile_pension_apres_abattements",
+      "indu_plaf_abat_pen",
+      "rni",
+      "impot_revenu_restant_a_payer",
+      "rfr",
+      "revenu_disponible"
+    ],
+    "scenarios": [
+      {
+        "id": "plafond_3000",
+        "label": "Plafonnement à 3 000 € par foyer fiscal",
+        "changes": {
+          "abatpen.max": 3000
+        }
+      },
+      {
+        "id": "suppression_10pct",
+        "label": "Suppression totale de l'abattement de 10 %",
+        "changes": {
+          "abatpen.taux": 0.0,
+          "abatpen.min": 0,
+          "abatpen.max": 0
+        }
+      }
+    ]
+  }
+}

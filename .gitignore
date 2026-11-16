@@ -1,0 +1,45 @@
+# Python & uv
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# Node.js / Next.js / Remotion
+node_modules/
+.next/
+out/
+dist/
+video/out/
+*.mp4
+*.mov
+*.webm
+
+# Environnement & secrets
+.env
+.env.local
+.env.*.local
+
+# Données lourdes, modèles & index locaux (ignorés sauf .gitkeep et exemples JSON)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/programs/*.pdf
+*.parquet
+*.sqlite
+*.db
+*.lancedb/
+*.gguf
+*.safetensors
+*.bin
+
+# Logs & OS
+*.log
+.DS_Store
+Thumbs.db
