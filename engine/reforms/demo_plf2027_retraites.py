@@ -13,18 +13,24 @@ Horizons temporels (``horizon``) :
   - ``"annee_1"`` : réforme appliquée uniquement à l'année courante 2025 (RFR N-2 de 2023
     inchangé → pas de bascule CSG immédiate).
   - ``"regime_permanent"`` : réforme appliquée sur toute la fenêtre 2021..2025 pour
-    observer la boucle rétroactive ``RFR(N-2) -> taux CSG(N)`` (ex. passage de 6,6 % à
-    8,3 % lorsque le RFR 2023 franchit 26 004 € pour 1 part).
+    observer la boucle rétroactive ``RFR(N-2) -> taux CSG(N)``.
 
-Limite méthodologique CSG (lissage 2 ans) :
-  Le moteur natif ``openfisca-france`` détermine le taux de CSG retraites de l'année N
-  uniquement à partir de ``rfr(N-2)``. Il ne modélise pas la règle Urssaf/Cnav (CSS
-  art. L136-8, III bis) conditionnant l'entrée dans un taux supérieur (6,6 % ou 8,3 %)
-  au franchissement du seuil sur **deux années consécutives (N-2 et N-3)**.
+Règle exacte et limite méthodologique du lissage CSG (CSS art. L. 136-8, III) :
+  Conformément à l'article L. 136-8, III du Code de la sécurité sociale et à l'Instruction
+  interministérielle DSS/2B/2024/184 du 04/12/2024 (Annexe 1, §2 « Mesure de lissage », p. 4-5) :
+  - Le lissage sur 2 ans ne protège **QUE le passage d'un taux <= 3,8 % (exonération ou taux
+    réduit) vers un taux supérieur (6,6 % ou 8,3 %)**, ce qui exige de dépasser le plafond du
+    taux réduit (``16 755 €`` pour 1 part en 2025) pendant **deux années consécutives (N-3 et N-2)**.
+  - **Il n'y a PAS de lissage sur 2 ans entre 6,6 % et 8,3 %** : un pensionné déjà au taux
+    médian (6,6 %) dont le ``RFR(N-2)`` franchit ``26 004 €`` (1 part) bascule immédiatement au
+    taux plein (8,3 %) dès l'année N.
+  - Limite ``openfisca-france`` : le moteur natif évalue uniquement ``rfr(period.n_2)`` sans
+    vérifier ``rfr(period.n_3)`` ; il bascule donc dès le premier dépassement ``N-2`` autour de
+    ``16 755 €`` (seuil de sortie du taux réduit 3,8 %).
 
-SOURCE: PLF 2027 n° 3210, art. 3 (déposé le 01/10/2026) — sous-plafond 3 000 € pensions de retraite ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026.
-SOURCE: DGFiP Brochure pratique IR 2026 (revenus 2025) / CGI art. 158, 5-a : min 454 € par pensionné, plafond 4 439 € par foyer fiscal.
-SOURCE: Barèmes CSG retraites 2025 (RFR 2023, CSS art. L136-8) : 12 817 € (exo), 16 755 € (6,6 %), 26 004 € (8,3 %) pour 1 part.
+SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (Article 3 modifiant CGI art. 158, 5-a ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026).
+SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : abattement 10 %, min 454 € par pensionné, plafond 4 439 € par foyer fiscal).
+SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 1 §2 « Mesure de lissage » p. 4-5 & Annexe 2 « Barème 2025 métropole » p. 7 : seuils RFR 2023 pour 1 part = 12 817 € / 16 755 € / 26 004 €).
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 from typing import Any, Literal
+import unicodedata
 
 if str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -52,18 +59,30 @@ SuppressionScope = Literal["retraites_seules", "global_158_5_a"]
 CalcCertainty = Literal["green", "yellow", "red"]
 LegalStatus = Literal["en_vigueur", "projet_de_loi_en_navette", "proposition_programme"]
 
-# SOURCE: DGFiP Brochure pratique IR 2026 (revenus 2025) / CGI art. 158, 5-a
+# SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Année d'imposition de référence 2025 et fenêtre N-4..N pour RFR N-2 / N-3)
 REFERENCE_YEAR = "2025"
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 1 §2 p. 4-5 : historique N-4..N requis pour RFR N-2 et N-3)
 HISTORY_YEARS = ("2021", "2022", "2023", "2024", "2025")
-# SOURCE: OpenFisca-France (csg_deductible_retraite(N) dépend de rfr(N-2), lui-même fonction de csg_deductible_retraite(N-2))
+# SOURCE: OpenFisca-France v177.0.0 — boucle récursive csg_deductible_retraite(N) <-> rfr(N-2) <-> retraite_imposable(N-2)
 DEFAULT_MAX_SPIRAL_LOOPS = 3
-# SOURCE: PLF 2027 n° 3210, art. 3 (déposé le 01/10/2026) — sous-plafond 3 000 € pensions de retraite ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026.
+
+# SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : taux 10 %)
+ABATPEN_TAUX_2025 = 0.10
+# SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : minimum 454 € par pensionné)
+ABATPEN_MIN_2025 = 454.0
+# SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : plafond 4 439 € par foyer fiscal)
+ABATPEN_MAX_2025 = 4439.0
+# SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (Article 3 modifiant CGI art. 158, 5-a : sous-plafond 3 000 € pensions de retraite)
 PLAFOND_ABATPEN_RETRAITE_3000 = 3000.0
-# SOURCE: Barèmes CSG retraites 2025 (RFR 2023, CSS art. L136-8) : 12 817 € (exo), 16 755 € (6,6 %), 26 004 € (8,3 %) pour 1 part.
+
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 2 « Barème 2025 métropole » p. 7 : seuil d'exonération RFR 2023 pour 1 part = 12 817 €)
 CSG_SEUIL_EXO_1_PART_2025 = 12817.0
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 2 « Barème 2025 métropole » p. 7 : seuil taux réduit 3,8 % -> médian 6,6 % RFR 2023 pour 1 part = 16 755 €)
 CSG_SEUIL_MEDIAN_1_PART_2025 = 16755.0
+# SOURCE: Instruction interministérielle DSS/2B/2024/184 du 04/12/2024, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf (Annexe 2 « Barème 2025 métropole » p. 7 : seuil taux médian 6,6 % -> plein 8,3 % RFR 2023 pour 1 part = 26 004 €)
 CSG_SEUIL_PLEIN_1_PART_2025 = 26004.0
-# SOURCE: Code du travail art. L3231-2 & décret SMIC 2025 (1 801,80 € brut/mois x 12)
+
+# SOURCE: Code du travail art. L3231-2 & Décret n° 2024-951 du 23/10/2024, https://www.legifrance.gouv.fr/loda/id/JORFTEXT000050385094 (SMIC mensuel brut 1 801,80 € x 12)
 SMIC_ANNUEL_BRUT_2025 = 21621.60
 
 
@@ -76,6 +95,26 @@ def horizon_to_start_date(horizon: HorizonMode) -> str:
     raise ValueError(f"Horizon inconnu : {horizon!r}")
 
 
+class LoiEnVigueurBaseline(Reform):
+    """Enveloppe non-modifiante de la loi en vigueur portant explicitement les métadonnées d'audit."""
+
+    name = "Loi en vigueur 2025 (CGI art. 158, 5-a — référence OpenFisca-France)"
+    calc_certainty: CalcCertainty = "green"
+    legal_status: LegalStatus = "en_vigueur"
+    source_ref: str = (
+        "DGFiP Notice 2041-NOTFC 2026 (revenus 2025), "
+        "https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf"
+    )
+
+    def __init__(self, baseline: TaxBenefitSystem, horizon: HorizonMode) -> None:
+        self.horizon: HorizonMode = horizon
+        super().__init__(baseline)
+
+    def apply(self) -> None:
+        # Loi en vigueur : aucune altération des paramètres ou variables de référence.
+        return None
+
+
 class PlafonnementAbattementRetraites3000(Reform):
     """PLF 2027 art. 3 : sous-plafond de 3 000 € par foyer sur les seules pensions de retraite.
 
@@ -86,6 +125,10 @@ class PlafonnementAbattementRetraites3000(Reform):
     name = "PLF 2027 art. 3 — Sous-plafond 3 000 € (pensions de retraite seules)"
     calc_certainty: CalcCertainty = "green"
     legal_status: LegalStatus = "projet_de_loi_en_navette"
+    source_ref: str = (
+        "PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), "
+        "https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw"
+    )
 
     def __init__(self, baseline: TaxBenefitSystem, horizon: HorizonMode = "annee_1") -> None:
         self.horizon: HorizonMode = horizon
@@ -102,7 +145,7 @@ class PlafonnementAbattementRetraites3000(Reform):
             definition_period = YEAR
 
             def formula(foyer_fiscal, period, parameters):
-                # SOURCE: DGFiP Brochure pratique IR 2026 (revenus 2025) / CGI art. 158, 5-a : min 454 € par pensionné, plafond 4 439 € par foyer fiscal.
+                # SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (min 454 € par pensionné, plafond 4 439 € par foyer fiscal)
                 abatpen = parameters(period).impot_revenu.calcul_revenus_imposables.deductions.abatpen
                 rev_pen_i = foyer_fiscal.members("revenu_assimile_pension", period)
                 pen_net_i = foyer_fiscal.members("revenu_assimile_pension_apres_abattements", period)
@@ -129,7 +172,7 @@ class PlafonnementAbattementRetraites3000(Reform):
                 abat_retraite_foyer = foyer_fiscal.sum(abat_retraite_i)
                 abat_autres_foyer = foyer_fiscal.sum(abat_autres_i)
 
-                # SOURCE: PLF 2027 n° 3210, art. 3 (déposé le 01/10/2026) — sous-plafond 3 000 € pensions de retraite ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026.
+                # SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (sous-plafond 3 000 € pensions de retraite)
                 abat_retraite_plafonne = min_(abat_retraite_foyer, PLAFOND_ABATPEN_RETRAITE_3000)
                 abat_autorise = min_(abatpen.max, abat_retraite_plafonne + abat_autres_foyer)
                 return max_(0.0, abat_foyer - abat_autorise)
@@ -147,6 +190,10 @@ class SuppressionAbattementRetraites10Pct(Reform):
 
     calc_certainty: CalcCertainty = "green"
     legal_status: LegalStatus = "proposition_programme"
+    source_ref: str = (
+        "Scénario analytique de suppression CGI art. 158, 5-a (comparaison à périmètre constant PLF 2027 art. 3), "
+        "https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf"
+    )
 
     def __init__(
         self,
@@ -167,7 +214,7 @@ class SuppressionAbattementRetraites10Pct(Reform):
             start_date = self._start_date
 
             def modify_params(parameters: Any) -> Any:
-                # SOURCE: DGFiP Brochure pratique IR 2026 (revenus 2025) / CGI art. 158, 5-a — suppression globale
+                # SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (suppression globale taux/min/max)
                 abatpen = parameters.impot_revenu.calcul_revenus_imposables.deductions.abatpen
                 abatpen.taux.update(start=start_date, value=0.0)
                 abatpen.min.update(start=start_date, value=0.0)
@@ -186,7 +233,7 @@ class SuppressionAbattementRetraites10Pct(Reform):
             definition_period = YEAR
 
             def formula(individu, period, parameters):
-                # SOURCE: DGFiP Brochure pratique IR 2026 (revenus 2025) / CGI art. 158, 5-a
+                # SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf
                 abatpen = parameters(period).impot_revenu.calcul_revenus_imposables.deductions.abatpen
                 rev_pen = individu("revenu_assimile_pension", period)
 
@@ -227,6 +274,7 @@ class HouseholdResult(BaseModel):
     horizon: HorizonMode
     calc_certainty: CalcCertainty
     legal_status: LegalStatus
+    source_ref: str
     pension_brute_annuelle: float
     pension_hors_retraite_annuelle: float
     salaire_brut_annuel: float
@@ -283,32 +331,39 @@ def build_retiree_households_payload() -> tuple[dict[str, Any], list[HouseholdSp
         "individus": {
             "ind_modeste_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(14400.0),
             },
             "ind_median_63_1": {
                 "date_naissance": {"ETERNITY": "1962-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(28800.0),
             },
             "ind_median_68_1": {
                 "date_naissance": {"ETERNITY": "1957-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(28800.0),
             },
             "ind_inter_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(38400.0),
             },
             "ind_aise_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(54000.0),
             },
             "ind_couple_aise_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
                 "statut_marital": _const_years("marie"),
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(36000.0),
             },
             "ind_couple_aise_2": {
                 "date_naissance": {"ETERNITY": "1959-01-01"},
                 "statut_marital": _const_years("marie"),
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(30000.0),
             },
         },
@@ -370,16 +425,19 @@ def build_active_control_households_payload() -> tuple[dict[str, Any], list[Hous
         "individus": {
             "ind_smic_1": {
                 "date_naissance": {"ETERNITY": "1995-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (SMIC 2025, non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(SMIC_ANNUEL_BRUT_2025),
             },
             "ind_c2e_1": {
                 "date_naissance": {"ETERNITY": "1986-01-01"},
                 "statut_marital": _const_years("marie"),
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(30000.0),
             },
             "ind_c2e_2": {
                 "date_naissance": {"ETERNITY": "1988-01-01"},
                 "statut_marital": _const_years("marie"),
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(24000.0),
             },
             "ind_c2e_enf1": {"date_naissance": {"ETERNITY": "2015-05-01"}},
@@ -387,19 +445,24 @@ def build_active_control_households_payload() -> tuple[dict[str, Any], list[Hous
             "ind_cadre_1": {
                 "date_naissance": {"ETERNITY": "1984-01-01"},
                 "categorie_salarie": _const_years("prive_cadre"),
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "salaire_de_base": _const_years(60000.0),
             },
             "ind_pa_1": {
                 "date_naissance": {"ETERNITY": "1980-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "pensions_alimentaires_percues": _const_years(38400.0),
             },
             "ind_inv_1": {
                 "date_naissance": {"ETERNITY": "1973-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "pensions_invalidite": _const_years(38400.0),
             },
             "ind_mixte_1": {
                 "date_naissance": {"ETERNITY": "1958-01-01"},
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "retraite_brute": _const_years(36000.0),
+                # HYPOTHÈSE DE SIMULATION : cas-type pédagogique calibré (non issu de données individuelles ERFS)
                 "pensions_alimentaires_percues": _const_years(10000.0),
             },
         },
@@ -444,17 +507,72 @@ def build_active_control_households_payload() -> tuple[dict[str, Any], list[Hous
     return payload, specs
 
 
+def _resolve_and_validate_metadata(
+    tax_benefit_system: TaxBenefitSystem,
+    horizon: HorizonMode | None,
+    calc_certainty: CalcCertainty | None,
+    legal_status: LegalStatus | None,
+    source_ref: str | None,
+) -> tuple[HorizonMode, CalcCertainty, LegalStatus, str]:
+    """Déduit et verrouille les métadonnées depuis le TaxBenefitSystem ; lève ValueError si incohérent."""
+    sys_horizon = getattr(tax_benefit_system, "horizon", None)
+    sys_certainty = getattr(tax_benefit_system, "calc_certainty", None)
+    sys_legal = getattr(tax_benefit_system, "legal_status", None)
+    sys_source = getattr(tax_benefit_system, "source_ref", None)
+
+    if sys_horizon is not None and horizon is not None and sys_horizon != horizon:
+        raise ValueError(
+            f"Incohérence horizon : le système {type(tax_benefit_system).__name__} porte horizon={sys_horizon!r} "
+            f"mais evaluate_households() a reçu horizon={horizon!r}."
+        )
+    if sys_certainty is not None and calc_certainty is not None and sys_certainty != calc_certainty:
+        raise ValueError(
+            f"Incohérence calc_certainty : {type(tax_benefit_system).__name__} porte {sys_certainty!r}, "
+            f"reçu {calc_certainty!r}."
+        )
+    if sys_legal is not None and legal_status is not None and sys_legal != legal_status:
+        raise ValueError(
+            f"Incohérence legal_status : {type(tax_benefit_system).__name__} porte {sys_legal!r}, "
+            f"reçu {legal_status!r}."
+        )
+
+    resolved_horizon = horizon if horizon is not None else sys_horizon
+    resolved_certainty = calc_certainty if calc_certainty is not None else sys_certainty
+    resolved_legal = legal_status if legal_status is not None else sys_legal
+    resolved_source = source_ref if source_ref is not None else sys_source
+
+    if resolved_horizon is None or resolved_certainty is None or resolved_legal is None:
+        raise ValueError(
+            f"Métadonnées manquantes pour {type(tax_benefit_system).__name__} : "
+            "horizon, calc_certainty et legal_status doivent être portés par le système (Reform/LoiEnVigueurBaseline) "
+            "ou passés explicitement sans valeur par défaut silencieuse."
+        )
+    if not resolved_source:
+        resolved_source = getattr(tax_benefit_system, "name", type(tax_benefit_system).__name__)
+
+    return resolved_horizon, resolved_certainty, resolved_legal, resolved_source
+
+
 def evaluate_households(
     tax_benefit_system: TaxBenefitSystem,
     payload: dict[str, Any],
     specs: list[HouseholdSpec],
     scenario_name: str,
-    horizon: HorizonMode = "annee_1",
-    calc_certainty: CalcCertainty = "green",
-    legal_status: LegalStatus = "en_vigueur",
+    horizon: HorizonMode | None = None,
+    calc_certainty: CalcCertainty | None = None,
+    legal_status: LegalStatus | None = None,
+    source_ref: str | None = None,
     period: str = REFERENCE_YEAR,
 ) -> dict[str, HouseholdResult]:
     """Exécute une simulation OpenFisca et indexe strictement les résultats par ID d'entité."""
+    resolved_horizon, resolved_certainty, resolved_legal, resolved_source = _resolve_and_validate_metadata(
+        tax_benefit_system=tax_benefit_system,
+        horizon=horizon,
+        calc_certainty=calc_certainty,
+        legal_status=legal_status,
+        source_ref=source_ref,
+    )
+
     sim = SimulationBuilder().build_from_entities(tax_benefit_system, payload)
     sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
 
@@ -488,7 +606,7 @@ def evaluate_households(
         men_idx = men_index[spec.menage_id]
         member_indices = [person_index[pid] for pid in spec.member_ids]
 
-        # Vérification stricte d'appartenance des membres au foyer et au ménage attendus
+        # Vérification stricte d'appartenance des membres au foyer attendu
         expected_ff = set(payload["foyers_fiscaux"][spec.foyer_fiscal_id].get("declarants", [])) | set(
             payload["foyers_fiscaux"][spec.foyer_fiscal_id].get("personnes_a_charge", [])
         )
@@ -513,9 +631,10 @@ def evaluate_households(
             household_id=spec.household_id,
             label=spec.label,
             scenario=scenario_name,
-            horizon=horizon,
-            calc_certainty=calc_certainty,
-            legal_status=legal_status,
+            horizon=resolved_horizon,
+            calc_certainty=resolved_certainty,
+            legal_status=resolved_legal,
+            source_ref=resolved_source,
             pension_brute_annuelle=pens_brute,
             pension_hors_retraite_annuelle=pens_autres,
             salaire_brut_annuel=sal_brut,
@@ -534,18 +653,14 @@ def run_comparison_suite(
     suppression_scope: SuppressionScope = "retraites_seules",
 ) -> dict[str, dict[str, dict[str, HouseholdResult]]]:
     """Lance la comparaison complète pour un horizon donné (Base vs Art. 3 PLF 2027 vs Suppression 10 %)."""
-    baseline = get_tax_benefit_system()
-    reforms: dict[str, tuple[TaxBenefitSystem, CalcCertainty, LegalStatus]] = {
-        "base": (baseline, "green", "en_vigueur"),
-        "plafond_3000": (
-            PlafonnementAbattementRetraites3000(baseline, horizon=horizon),
-            PlafonnementAbattementRetraites3000.calc_certainty,
-            PlafonnementAbattementRetraites3000.legal_status,
-        ),
-        "suppression_10pct": (
-            SuppressionAbattementRetraites10Pct(baseline, horizon=horizon, scope=suppression_scope),
-            SuppressionAbattementRetraites10Pct.calc_certainty,
-            SuppressionAbattementRetraites10Pct.legal_status,
+    baseline_raw = get_tax_benefit_system()
+    systems: dict[str, TaxBenefitSystem] = {
+        "base": LoiEnVigueurBaseline(baseline_raw, horizon=horizon),
+        "plafond_3000": PlafonnementAbattementRetraites3000(baseline_raw, horizon=horizon),
+        "suppression_10pct": SuppressionAbattementRetraites10Pct(
+            baseline_raw,
+            horizon=horizon,
+            scope=suppression_scope,
         ),
     }
 
@@ -554,32 +669,46 @@ def run_comparison_suite(
 
     retirees: dict[str, dict[str, HouseholdResult]] = {}
     actives: dict[str, dict[str, HouseholdResult]] = {}
-    for scenario_name, (tbs, certainty, status) in reforms.items():
+    for scenario_name, tbs in systems.items():
         retirees[scenario_name] = evaluate_households(
             tbs,
             retiree_payload,
             retiree_specs,
             scenario_name=scenario_name,
-            horizon=horizon,
-            calc_certainty=certainty,
-            legal_status=status,
         )
         actives[scenario_name] = evaluate_households(
             tbs,
             active_payload,
             active_specs,
             scenario_name=scenario_name,
-            horizon=horizon,
-            calc_certainty=certainty,
-            legal_status=status,
         )
 
     return {"retirees": retirees, "actives": actives}
 
 
+def to_ascii_safe(text: str) -> str:
+    """Convertit les symboles et accents en ASCII pur pour consoles CP1252/CP850 strictes."""
+    replaced = text.replace("€", "EUR").replace("Δ", "Delta").replace("→", "->").replace("«", '"').replace("»", '"')
+    normalized = unicodedata.normalize("NFKD", replaced)
+    return normalized.encode("ascii", errors="ignore").decode("ascii")
+
+
+def _configure_console_utf8() -> bool:
+    """Tente de reconfigurer stdout/stderr en UTF-8 ; retourne True si UTF-8 est actif."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    return "utf" in encoding
+
+
 def format_comparison_table(
     retirees_by_scenario: dict[str, dict[str, HouseholdResult]],
     horizon: HorizonMode,
+    ascii_safe: bool = False,
 ) -> str:
     """Formate un tableau Markdown comparant RFR (N-2/N), IR, CSG (Δ) et Revenu Disponible (Δ)."""
     base_map = retirees_by_scenario["base"]
@@ -612,10 +741,13 @@ def format_comparison_table(
             f"{s.csg_retraite:,.1f} € ({s.csg_retraite - b.csg_retraite:+,.1f} €) | "
             f"{s.revenu_disponible:,.2f} € ({s.revenu_disponible - b.revenu_disponible:+,.2f} €) |"
         )
-    return "\n".join(lines)
+    rendered = "\n".join(lines)
+    return to_ascii_safe(rendered) if ascii_safe else rendered
 
 
 def main() -> int:
+    utf8_ok = _configure_console_utf8()
+
     parser = argparse.ArgumentParser(description="Simulation PLF 2027 art. 3 vs Suppression 10 % retraites.")
     parser.add_argument(
         "--horizon",
@@ -623,19 +755,32 @@ def main() -> int:
         default="both",
         help="Horizon temporel de simulation (défaut : both).",
     )
+    parser.add_argument(
+        "--ascii",
+        action="store_true",
+        help="Force un rendu ASCII pur (Delta / EUR) compatible CP1252/CP850.",
+    )
     args = parser.parse_args()
+    use_ascii = bool(args.ascii or not utf8_ok)
+
+    def _emit(line: str) -> None:
+        print(to_ascii_safe(line) if use_ascii else line)
 
     horizons: list[HorizonMode] = ["annee_1", "regime_permanent"] if args.horizon == "both" else [args.horizon]
     for horizon in horizons:
         suite = run_comparison_suite(horizon=horizon)
-        titre_h = "EFFET ANNÉE 1 (2025 seul, RFR N-2 figé)" if horizon == "annee_1" else "RÉGIME PERMANENT (2021..2025, rétroaction RFR N-2 -> CSG)"
-        print(f"\n=== VERITE FISCALE 2027 :: DEMO PLF RETRAITES [{titre_h}] ===\n")
-        print(format_comparison_table(suite["retirees"], horizon=horizon))
-        print("\n--- Contrôle périmètre Actifs & Pensions hors retraite (AGENTS.md) ---")
+        titre_h = (
+            "EFFET ANNÉE 1 (2025 seul, RFR N-2 figé)"
+            if horizon == "annee_1"
+            else "RÉGIME PERMANENT (2021..2025, rétroaction RFR N-2 -> CSG)"
+        )
+        _emit(f"\n=== VERITE FISCALE 2027 :: DEMO PLF RETRAITES [{titre_h}] ===\n")
+        _emit(format_comparison_table(suite["retirees"], horizon=horizon, ascii_safe=use_ascii))
+        _emit("\n--- Contrôle périmètre Actifs & Pensions hors retraite (AGENTS.md) ---")
         for hid, b in suite["actives"]["base"].items():
             p = suite["actives"]["plafond_3000"][hid]
             s = suite["actives"]["suppression_10pct"][hid]
-            print(
+            _emit(
                 f"- {b.label}: Base IR={b.ir_paye:,.0f} € | Base RevDisp={b.revenu_disponible:,.2f} € | "
                 f"Δ Art.3 3000€={p.revenu_disponible - b.revenu_disponible:+.2f} € | "
                 f"Δ Suppr.10% (retraites seules)={s.revenu_disponible - b.revenu_disponible:+.2f} €"

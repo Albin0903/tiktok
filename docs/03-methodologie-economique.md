@@ -24,10 +24,20 @@ En France, le **Revenu Fiscal de Référence (RFR) de l'année $N-2$** détermin
 
 **Règle d'implémentation :** toute simulation évalue les années $N-4 \dots N$ (ex: `2021..2025`) avec `simulation.max_spiral_loops = 3`. Cela permet de distinguer explicitement deux horizons (`horizon: "annee_1" | "regime_permanent"`) :
 1. **L'effet immédiat Année 1 (`annee_1`)** : la réforme s'applique uniquement sur l'année courante $N$ (`2025-01-01`). Le `rfr(N-2)` (`2023`) reste inchangé : aucune bascule immédiate de tranche CSG n'intervient.
-2. **L'effet en régime permanent (`regime_permanent`)** : la réforme s'applique sur toute la fenêtre historique $N-4 \dots N$ (`2021-01-01`), mettant en évidence lorsqu'une hausse d'assiette imposable fait basculer un retraité au-dessus d'un seuil de RFR pour la CSG (effet de falaise CSG, ex. `26 004 €` pour 1 part en 2025).
+2. **L'effet en régime permanent (`regime_permanent`)** : la réforme s'applique sur toute la fenêtre historique $N-4 \dots N$ (`2021-01-01`), mettant en évidence lorsqu'une hausse d'assiette imposable fait basculer un retraité au-dessus d'un seuil de RFR pour la CSG (effet de falaise CSG, ex. `16 755 €` pour `3,8 % -> 6,6 %` et `26 004 €` pour `6,6 % -> 8,3 %` pour 1 part en 2025).
 
-> **Limite documentée du moteur natif `openfisca-france` (lissage CSG 2 ans) :**
-> En droit réel (CSS art. L136-8, III bis / règles Urssaf-Cnav), le franchissement à la hausse d'un seuil de RFR n'entraîne l'application du taux médian (`6,6 %`) ou normal (`8,3 %`) qu'après **deux années consécutives de dépassement (`N-2` et `N-3`)**. Or `openfisca-france` détermine nativement la tranche de CSG retraites de l'année $N$ à partir du seul `rfr(period.n_2)` sur une année unique. Les simulations en `regime_permanent` représentent donc l'état stationnaire après deux exercices pleins d'application de la réforme.
+> **Règle juridique exacte et limite du moteur natif `openfisca-france` (lissage CSG 2 ans) :**
+> Conformément à l'**article L. 136-8, III du Code de la sécurité sociale** et à l'**Instruction interministérielle DSS/2B/2024/184 du 04/12/2024 (Annexe 1, §2 « Mesure de lissage », p. 4-5)** :
+> - Le dispositif de lissage sur 2 ans **ne protège que le passage d'un taux `<= 3,8 %` (exonération `0 %` ou taux réduit `3,8 %`) vers un taux supérieur (`6,6 %` ou `8,3 %`)**, en exigeant que le RFR dépasse le plafond du taux réduit (`16 755 €` pour 1 part en 2025) pendant **deux années consécutives (`N-3` et `N-2`)**.
+> - **Il n'existe PAS de lissage sur 2 ans entre le taux médian (`6,6 %`) et le taux normal (`8,3 %`)** : un pensionné déjà assujetti au taux médian `6,6 %` dont le `RFR(N-2)` franchit `26 004 €` (1 part) bascule immédiatement à `8,3 %` dès l'année $N$.
+> - Le moteur natif `openfisca-france` n'évaluant que `rfr(period.n_2)` sans inspecter `rfr(period.n_3)`, sa limite de modélisation concerne donc les foyers situés autour du seuil de sortie du taux réduit (`3,8 %`), qui basculent dans OpenFisca dès le premier dépassement `N-2`.
+
+### C. Procédure de contre-vérification externe (`impots.gouv.fr` & `LexImpact`)
+Conformément à l'étape C de `AGENTS.md`, chaque réforme sur les foyers types baseline doit être vérifiée indépendamment du moteur OpenFisca par deux contrôles :
+1. **Contre-calcul analytique dans `pytest`** : recalcul direct en Python des tranches du barème IR (CGI art. 197), de l'abattement 10 %, de l'abattement +65 ans (`abat_spe`), de la décote (`seuil_celib - 0,4525 * droits_simples`) et des arrondis fiscaux à l'euro le plus proche (reproduit dans `engine/tests/test_demo_plf2027_retraites.py`).
+2. **Vérification manuelle sur les simulateurs institutionnels** :
+   - **DGFiP (`https://simulateur-ir-ifi.impots.gouv.fr`)** : sélectionner l'année d'imposition 2025, renseigner l'année de naissance du déclarant (`1962` pour `< 65 ans` ou `1957` pour `>= 65 ans`) et reporter en case **`1AS`** la *retraite imposable* (`retraite_brute + csg_deductible_retraite`, ex. `27 590 €` pour `28 800 €` brut ou `50 814 €` pour `54 000 €` brut) afin de comparer l'impôt dû et le RFR.
+   - **Assemblée nationale — LexImpact (`https://leximpact.an.fr`)** : saisir le cas-type équivalent dans le calculateur socio-fiscal et vérifier la convergence à l'euro sur `irpp`, `csg_deductible_retraite`, `csg_imposable_retraite` et `revenu_disponible`.
 
 ---
 
