@@ -26,7 +26,7 @@
       "csg_imposable_retraite",
       "revenu_disponible"
     ],
-    "methodological_limit_csg_smoothing": "Le lissage sur 2 ans (CSS art. L. 136-8, III ; Instruction DSS du 04/12/2024, Annexe 1 §2) ne protège que la sortie d'un taux <= 3,8 % vers 6,6 % ou 8,3 % (franchissement du seuil de taux réduit en N-3 et N-2). Il n'existe aucun lissage entre 6,6 % et 8,3 %. OpenFisca-France natif n'inspecte que rfr(N-2) et bascule donc dès le premier dépassement autour de 16 755 € (seuil 3,8 %).",
+    "methodological_limit_csg_smoothing": "Le lissage sur 2 ans (CSS art. L. 136-8, III ; Instruction DSS du 04/12/2024, Annexe 1 §2) protège la sortie d'un taux <= 3,8 % vers 6,6 % ou 8,3 % et CASA 0,3 % (franchissement du seuil de taux réduit en N-3 et N-2). Il n'existe aucun lissage entre 6,6 % et 8,3 % (bascule immédiate à RFR >= 26 004 € pour 1 part). Le socle _BaseRetraitesReform de demo_plf2027_retraites.py surcharge csg_deductible_retraite, csg_imposable_retraite, crds_retraite et casa pour appliquer la borne exacte >= 26 004 € et le lissage N-3/N-2.",
     "scenarios": [
       {
         "id": "plafond_3000",

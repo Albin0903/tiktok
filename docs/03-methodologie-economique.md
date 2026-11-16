@@ -26,11 +26,11 @@ En France, le **Revenu Fiscal de Référence (RFR) de l'année $N-2$** détermin
 1. **L'effet immédiat Année 1 (`annee_1`)** : la réforme s'applique uniquement sur l'année courante $N$ (`2025-01-01`). Le `rfr(N-2)` (`2023`) reste inchangé : aucune bascule immédiate de tranche CSG n'intervient.
 2. **L'effet en régime permanent (`regime_permanent`)** : la réforme s'applique sur toute la fenêtre historique $N-4 \dots N$ (`2021-01-01`), mettant en évidence lorsqu'une hausse d'assiette imposable fait basculer un retraité au-dessus d'un seuil de RFR pour la CSG (effet de falaise CSG, ex. `16 755 €` pour `3,8 % -> 6,6 %` et `26 004 €` pour `6,6 % -> 8,3 %` pour 1 part en 2025).
 
-> **Règle juridique exacte et limite du moteur natif `openfisca-france` (lissage CSG 2 ans) :**
-> Conformément à l'**article L. 136-8, III du Code de la sécurité sociale** et à l'**Instruction interministérielle DSS/2B/2024/184 du 04/12/2024 (Annexe 1, §2 « Mesure de lissage », p. 4-5)** :
-> - Le dispositif de lissage sur 2 ans **ne protège que le passage d'un taux `<= 3,8 %` (exonération `0 %` ou taux réduit `3,8 %`) vers un taux supérieur (`6,6 %` ou `8,3 %`)**, en exigeant que le RFR dépasse le plafond du taux réduit (`16 755 €` pour 1 part en 2025) pendant **deux années consécutives (`N-3` et `N-2`)**.
-> - **Il n'existe PAS de lissage sur 2 ans entre le taux médian (`6,6 %`) et le taux normal (`8,3 %`)** : un pensionné déjà assujetti au taux médian `6,6 %` dont le `RFR(N-2)` franchit `26 004 €` (1 part) bascule immédiatement à `8,3 %` dès l'année $N$.
-> - Le moteur natif `openfisca-france` n'évaluant que `rfr(period.n_2)` sans inspecter `rfr(period.n_3)`, sa limite de modélisation concerne donc les foyers situés autour du seuil de sortie du taux réduit (`3,8 %`), qui basculent dans OpenFisca dès le premier dépassement `N-2`.
+> **Règle juridique exacte et implémentation du lissage CSG / CASA :**
+> Conformément à l'**article L. 136-8, III du Code de la sécurité sociale** et à l'**Instruction interministérielle DSS/2B/2024/184 du 04/12/2024 (Annexe 1, §2 « Mesure de lissage », p. 4-5 & Annexe 2/3)** :
+> - Le dispositif de lissage sur 2 ans **protège le passage d'un taux `<= 3,8 %` (exonération `0 %` ou taux réduit `3,8 %`) vers un taux supérieur (`6,6 %` ou `8,3 %` et CASA `0,3 %`)**, en exigeant que le RFR dépasse le plafond du taux réduit (`16 755 €` pour 1 part en 2025) pendant **deux années consécutives (`N-3` et `N-2`)**.
+> - **Il n'existe PAS de lissage sur 2 ans entre le taux médian (`6,6 %`) et le taux normal (`8,3 %`)** : un pensionné déjà assujetti au taux médian `6,6 %` dont le `RFR(N-2)` est **`>= 26 004 €`** (1 part) bascule immédiatement à `8,3 %` dès l'année $N$.
+> - **Correctifs embarqués dans `engine/reforms/demo_plf2027_retraites.py`** : nos réformes surchargent `csg_deductible_retraite`, `csg_imposable_retraite`, `crds_retraite` et `casa` pour appliquer à la fois la borne exacte `rfr >= 26 004 €` (au lieu de `rfr > 26 004 €` dans OpenFisca natif) et le lissage `N-3 / N-2` (pour `N >= 2024`).
 
 ### C. Procédure de contre-vérification externe (`impots.gouv.fr` & `LexImpact`)
 Conformément à l'étape C de `AGENTS.md`, chaque réforme sur les foyers types baseline doit être vérifiée indépendamment du moteur OpenFisca par deux contrôles :

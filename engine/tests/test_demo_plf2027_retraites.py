@@ -147,12 +147,11 @@ def test_horizon_annee_1_vs_regime_permanent_csg_threshold_jump(
 
 
 def test_csg_3_8_pct_smoothing_limit_n_3_vs_n_2() -> None:
-    """Documente la limite de lissage autour de 3,8 % (16 755 €) : OpenFisca ignore RFR(N-3).
+    """Vérifie le lissage CSS art. L. 136-8, III (N-3/N-2) sur la CSG (3,8 %) et la CASA (0 €).
 
-    En droit réel (CSS art. L. 136-8, III ; Instruction DSS du 04/12/2024, Annexe 1 §2),
-    un pensionné au taux réduit (3,8 %) ne bascule vers 6,6 % ou 8,3 % qu'après deux
-    dépassements consécutifs (N-3 et N-2). Ici, RFR(2022) <= 16 755 € et RFR(2023) > 16 755 € :
-    OpenFisca natif bascule dès le premier dépassement N-2 (684 € -> 1 188 €).
+    Un pensionné au taux réduit (3,8 % en N-1 car RFR(2022) <= 15 988 €) dont le RFR(2023)
+    dépasse 16 755 € pour la première fois reste maintenu à 3,8 % (684 €) et exonéré de
+    CASA (0 €) en 2025, contrairement au comportement natif d'OpenFisca-France.
     """
     tbs = get_tax_benefit_system()
     payload = {
@@ -160,8 +159,8 @@ def test_csg_3_8_pct_smoothing_limit_n_3_vs_n_2() -> None:
             "ind_38": {
                 "date_naissance": {"ETERNITY": "1962-01-01"},
                 "retraite_brute": {
-                    "2021": 16000.0,
-                    "2022": 16000.0,
+                    "2021": 15500.0,
+                    "2022": 15500.0,
                     "2023": 18000.0,
                     "2024": 18000.0,
                     "2025": 18000.0,
@@ -181,18 +180,57 @@ def test_csg_3_8_pct_smoothing_limit_n_3_vs_n_2() -> None:
     )
     sim_supp.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
 
-    # Base : RFR(N-3=2022) <= 16 755 et RFR(N-2=2023) <= 16 755 -> reste à 3,8 % (684 €)
-    assert sim_base.calculate("rfr", "2022")[0] <= CSG_SEUIL_MEDIAN_1_PART_2025
+    # Base : RFR(N-3=2022) <= 15 988 et RFR(N-2=2023) <= 16 755 -> 3,8 % (684 €), CASA = 0 €
+    assert sim_base.calculate("rfr", "2022")[0] <= 15988.0
     assert sim_base.calculate("rfr", "2023")[0] <= CSG_SEUIL_MEDIAN_1_PART_2025
-    csg_base_2025 = float(-(sim_base.calculate_add("csg_deductible_retraite", "2025")[0] + sim_base.calculate_add("csg_imposable_retraite", "2025")[0]))
+    csg_base_2025 = float(
+        -(sim_base.calculate_add("csg_deductible_retraite", "2025")[0] + sim_base.calculate_add("csg_imposable_retraite", "2025")[0])
+    )
     assert csg_base_2025 == pytest.approx(18000.0 * 0.038, abs=0.2)
+    assert float(-sim_base.calculate_add("casa", "2025")[0]) == 0.0
 
-    # Sous réforme : RFR(N-3=2022) reste <= 16 755 € (16 000 €), mais RFR(N-2=2023) franchit (17 244 €)
-    assert sim_supp.calculate("rfr", "2022")[0] <= CSG_SEUIL_MEDIAN_1_PART_2025
+    # Sous réforme : RFR(N-3=2022) = 15 500 € <= 15 988 €, mais RFR(N-2=2023) = 17 244 € > 16 755 €
+    # Le lissage CSS art. L. 136-8, III maintient CSG à 3,8 % (684 €) et CASA à 0 € en 2025.
+    assert sim_supp.calculate("rfr", "2022")[0] <= 15988.0
     assert sim_supp.calculate("rfr", "2023")[0] > CSG_SEUIL_MEDIAN_1_PART_2025
-    csg_supp_2025 = float(-(sim_supp.calculate_add("csg_deductible_retraite", "2025")[0] + sim_supp.calculate_add("csg_imposable_retraite", "2025")[0]))
-    # OpenFisca-France natif ne modélise pas la condition RFR(N-3) : il passe directement à 6,6 % (1 188 €)
-    assert csg_supp_2025 == pytest.approx(18000.0 * 0.066, abs=0.2)
+    csg_supp_2025 = float(
+        -(sim_supp.calculate_add("csg_deductible_retraite", "2025")[0] + sim_supp.calculate_add("csg_imposable_retraite", "2025")[0])
+    )
+    casa_supp_2025 = float(-sim_supp.calculate_add("casa", "2025")[0])
+    assert csg_supp_2025 == pytest.approx(18000.0 * 0.038, abs=0.2)
+    assert casa_supp_2025 == 0.0
+
+
+def test_csg_exact_boundary_26004_taux_plein() -> None:
+    """Vérifie la borne exacte 26 004 € (1 part) : 8,3 % à 26 004 € vs 6,6 % à 26 003 €."""
+    tbs = get_tax_benefit_system()
+    sys_exact = LoiEnVigueurBaseline(tbs, horizon="regime_permanent")
+
+    def _run_at_rfr2023(rfr_2023_target: float) -> float:
+        payload = {
+            "individus": {
+                "ind_b": {
+                    "date_naissance": {"ETERNITY": "1962-01-01"},
+                    "retraite_brute": {"2025": 28800.0},
+                }
+            },
+            "foyers_fiscaux": {
+                "ff_b": {
+                    "declarants": ["ind_b"],
+                    "rfr": {"2022": 20000.0, "2023": rfr_2023_target},
+                }
+            },
+            "familles": {"fam_b": {"parents": ["ind_b"]}},
+            "menages": {"men_b": {"personne_de_reference": ["ind_b"]}},
+        }
+        sim = SimulationBuilder().build_from_entities(sys_exact, payload)
+        sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
+        return float(
+            -(sim.calculate_add("csg_deductible_retraite", "2025")[0] + sim.calculate_add("csg_imposable_retraite", "2025")[0])
+        )
+
+    assert _run_at_rfr2023(26003.0) == pytest.approx(28800.0 * 0.066, abs=0.2)
+    assert _run_at_rfr2023(26004.0) == pytest.approx(28800.0 * 0.083, abs=0.2)
 
 
 def test_abat_spe_senior_65_interaction_and_abatpen_bounds(
@@ -317,6 +355,25 @@ def test_evaluate_households_metadata_validation_raises() -> None:
     # 4. Mauvaise certitude -> ValueError
     with pytest.raises(ValueError, match="Incohérence calc_certainty"):
         evaluate_households(reform_rp, payload, specs, scenario_name="plafond_3000", calc_certainty="red")
+
+
+def test_evaluate_households_mismatched_menage_raises() -> None:
+    """Vérifie qu'une incohérence de membres entre Menage/Famille et spec lève ValueError."""
+    tbs = get_tax_benefit_system()
+    payload, specs = build_retiree_households_payload()
+    baseline_sys = LoiEnVigueurBaseline(tbs, horizon="annee_1")
+
+    # Échange les membres entre men_modeste et men_aise -> situation OpenFisca valide mais incohérente
+    corrupted_payload = {
+        **payload,
+        "menages": {
+            **payload["menages"],
+            "men_modeste": dict(payload["menages"]["men_aise"]),
+            "men_aise": dict(payload["menages"]["men_modeste"]),
+        },
+    }
+    with pytest.raises(ValueError, match="Incohérence membres Menage"):
+        evaluate_households(baseline_sys, corrupted_payload, specs, scenario_name="base")
 
 
 def test_external_dgfip_2042_analytical_cross_check(

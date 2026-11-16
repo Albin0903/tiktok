@@ -15,18 +15,23 @@ Horizons temporels (``horizon``) :
   - ``"regime_permanent"`` : réforme appliquée sur toute la fenêtre 2021..2025 pour
     observer la boucle rétroactive ``RFR(N-2) -> taux CSG(N)``.
 
-Règle exacte et limite méthodologique du lissage CSG (CSS art. L. 136-8, III) :
+Règle exacte et implémentation du lissage CSG / CASA (CSS art. L. 136-8, III) :
   Conformément à l'article L. 136-8, III du Code de la sécurité sociale et à l'Instruction
   interministérielle DSS/2B/2024/184 du 04/12/2024 (Annexe 1, §2 « Mesure de lissage », p. 4-5) :
-  - Le lissage sur 2 ans ne protège **QUE le passage d'un taux <= 3,8 % (exonération ou taux
-    réduit) vers un taux supérieur (6,6 % ou 8,3 %)**, ce qui exige de dépasser le plafond du
-    taux réduit (``16 755 €`` pour 1 part en 2025) pendant **deux années consécutives (N-3 et N-2)**.
+  - Le lissage sur 2 ans protège **le passage d'un taux <= 3,8 % (exonération ou taux réduit)
+    vers un taux supérieur (6,6 % ou 8,3 % et CASA 0,3 %)**, ce qui exige de dépasser le
+    plafond du taux réduit (``16 755 €`` pour 1 part en 2025) pendant **deux années consécutives
+    (N-3 et N-2)**.
   - **Il n'y a PAS de lissage sur 2 ans entre 6,6 % et 8,3 %** : un pensionné déjà au taux
-    médian (6,6 %) dont le ``RFR(N-2)`` franchit ``26 004 €`` (1 part) bascule immédiatement au
+    médian (6,6 %) dont le ``RFR(N-2)`` est **>= 26 004 €** (1 part) bascule immédiatement au
     taux plein (8,3 %) dès l'année N.
-  - Limite ``openfisca-france`` : le moteur natif évalue uniquement ``rfr(period.n_2)`` sans
-    vérifier ``rfr(period.n_3)`` ; il bascule donc dès le premier dépassement ``N-2`` autour de
-    ``16 755 €`` (seuil de sortie du taux réduit 3,8 %).
+  - Correctifs appliqués dans ce module sur ``csg_deductible_retraite``,
+    ``csg_imposable_retraite``, ``crds_retraite`` et ``casa`` (vs ``openfisca-france 177.0.0``
+    natif) :
+      1. Borne exacte du taux plein : ``rfr >= seuil_rfr3`` (``26 004 €`` -> 8,3 %, au lieu de
+         ``rfr > 26 004 €`` dans OpenFisca natif).
+      2. Lissage ``N-3 / N-2`` (pour ``N >= 2024``) : maintien au taux réduit (3,8 %) et
+         exonération de CASA lors du premier dépassement du seuil réduit si ``RFR(N-3) <= seuil_rfr2(N-1)``.
 
 SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (Article 3 modifiant CGI art. 158, 5-a ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026).
 SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : abattement 10 %, min 454 € par pensionné, plafond 4 439 € par foyer fiscal).
@@ -45,11 +50,14 @@ import unicodedata
 if str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from openfisca_core.model_api import ADD, YEAR, Variable, max_, min_, round_, where
+from openfisca_core.model_api import ADD, MONTH, YEAR, Variable, max_, min_, not_, round_, where
 from openfisca_core.reforms import Reform
 from openfisca_core.simulations import SimulationBuilder
 from openfisca_core.taxbenefitsystems import TaxBenefitSystem
 from openfisca_france.entities import FoyerFiscal, Individu
+from openfisca_france.model.prelevements_obligatoires.prelevements_sociaux.contributions_sociales.base import (
+    montant_csg_crds,
+)
 from pydantic import BaseModel
 
 from engine.reforms import get_tax_benefit_system
@@ -95,8 +103,126 @@ def horizon_to_start_date(horizon: HorizonMode) -> str:
     raise ValueError(f"Horizon inconnu : {horizon!r}")
 
 
-class LoiEnVigueurBaseline(Reform):
-    """Enveloppe non-modifiante de la loi en vigueur portant explicitement les métadonnées d'audit."""
+def _compute_csg_retraite_masks(individu: Any, period: Any, parameters: Any) -> tuple[Any, Any, Any, Any]:
+    """Calcule les 4 masques de taux CSG retraites conformes à CSS art. L. 136-8, III.
+
+    Corrige deux écarts d'OpenFisca-France 177.0.0 natif :
+      1. Borne exacte du taux plein : ``rfr >= seuil_rfr3`` (26 004 € pour 1 part -> 8,3 %).
+      2. Lissage sur 2 ans (pour N >= 2024 où N-3 >= 2021 est renseigné) : un foyer dont
+         ``RFR(N-3) <= seuil_rfr2(N-1)`` reste au taux réduit (3,8 %) et exonéré de CASA
+         lors du premier dépassement de ``seuil_rfr2(N)``.
+    """
+    rfr_n_2 = individu.foyer_fiscal("rfr", period=period.n_2)
+    nbptr_n_2 = individu.foyer_fiscal("nbptr", period=period.n_2)
+    params_n = parameters(period)
+    seuils = params_n.prelevements_sociaux.contributions_sociales.csg.remplacement.seuils
+
+    seuil_exo = seuils.seuil_rfr1.seuil_rfr1 + (nbptr_n_2 - 1) * 2 * seuils.seuil_rfr1.demi_part_suppl_rfr1
+    seuil_red = seuils.seuil_rfr2.seuil_rfr2 + (nbptr_n_2 - 1) * 2 * seuils.seuil_rfr2.demi_part_suppl_rfr2
+    seuil_plein = seuils.seuil_rfr3.seuil_rfr3 + (nbptr_n_2 - 1) * 2 * seuils.seuil_rfr3.demi_part_suppl_rfr3
+
+    est_exo = rfr_n_2 <= seuil_exo
+    est_red = (rfr_n_2 > seuil_exo) & (rfr_n_2 <= seuil_red)
+    est_med = (rfr_n_2 > seuil_red) & (rfr_n_2 < seuil_plein)
+    est_plein = rfr_n_2 >= seuil_plein
+
+    if period.start.year >= 2024:
+        period_n_1 = period.offset(-1, "year")
+        period_n_3 = period_n_1.n_2
+        rfr_n_3 = individu.foyer_fiscal("rfr", period=period_n_3)
+        nbptr_n_3 = individu.foyer_fiscal("nbptr", period=period_n_3)
+        seuils_prev = parameters(period_n_1).prelevements_sociaux.contributions_sociales.csg.remplacement.seuils
+        seuil_red_prev = (
+            seuils_prev.seuil_rfr2.seuil_rfr2 + (nbptr_n_3 - 1) * 2 * seuils_prev.seuil_rfr2.demi_part_suppl_rfr2
+        )
+        # CSS art. L. 136-8, III : maintien à 3,8 % (et hors CASA) si taux <= 3,8 % en N-1
+        lissage_actif = (rfr_n_3 <= seuil_red_prev) & (est_med | est_plein)
+        est_red = est_red | lissage_actif
+        est_med = est_med & not_(lissage_actif)
+        est_plein = est_plein & not_(lissage_actif)
+
+    return est_exo, est_red, est_med, est_plein
+
+
+class _BaseRetraitesReform(Reform):
+    """Socle commun appliquant le lissage CSG/CASA (N-3/N-2) et la borne exacte >= 26 004 €."""
+
+    def apply(self) -> None:
+        class csg_deductible_retraite(Variable):
+            value_type = float
+            entity = Individu
+            label = "CSG déductible sur les pensions de retraite (lissage N-3 et borne exacte)"
+            definition_period = MONTH
+
+            def formula_2019(individu, period, parameters):
+                retraite_brute = individu("retraite_brute", period)
+                _, est_red, est_med, est_plein = _compute_csg_retraite_masks(individu, period, parameters)
+                params_n = parameters(period)
+                return montant_csg_crds(
+                    base_sans_abattement=retraite_brute,
+                    indicatrice_taux_plein=est_plein,
+                    indicatrice_taux_reduit=est_red,
+                    indicatrice_taux_intermediaire=est_med,
+                    law_node=params_n.prelevements_sociaux.contributions_sociales.csg.remplacement.pensions_retraite_invalidite.deductible,
+                    plafond_securite_sociale=params_n.prelevements_sociaux.pss.plafond_securite_sociale_mensuel,
+                )
+
+        class csg_imposable_retraite(Variable):
+            value_type = float
+            entity = Individu
+            label = "CSG imposable sur les pensions de retraite (lissage N-3 et borne exacte)"
+            definition_period = MONTH
+
+            def formula_2019(individu, period, parameters):
+                retraite_brute = individu("retraite_brute", period)
+                _, est_red, est_med, est_plein = _compute_csg_retraite_masks(individu, period, parameters)
+                params_n = parameters(period)
+                return montant_csg_crds(
+                    base_sans_abattement=retraite_brute,
+                    indicatrice_taux_plein=est_plein,
+                    indicatrice_taux_reduit=est_red,
+                    indicatrice_taux_intermediaire=est_med,
+                    law_node=params_n.prelevements_sociaux.contributions_sociales.csg.remplacement.pensions_retraite_invalidite.imposable,
+                    plafond_securite_sociale=params_n.prelevements_sociaux.pss.plafond_securite_sociale_mensuel,
+                )
+
+        class crds_retraite(Variable):
+            value_type = float
+            entity = Individu
+            label = "CRDS sur les pensions de retraite (borne et lissage exacts)"
+            definition_period = MONTH
+
+            def formula_2019(individu, period, parameters):
+                retraite_brute = individu("retraite_brute", period)
+                est_exo, _, _, _ = _compute_csg_retraite_masks(individu, period, parameters)
+                params_n = parameters(period)
+                return montant_csg_crds(
+                    base_sans_abattement=retraite_brute,
+                    law_node=params_n.prelevements_sociaux.contributions_sociales.crds,
+                    plafond_securite_sociale=params_n.prelevements_sociaux.pss.plafond_securite_sociale_mensuel,
+                ) * not_(est_exo)
+
+        class casa(Variable):
+            value_type = float
+            entity = Individu
+            label = "Contribution additionnelle de solidarité et d'autonomie (lissage N-3 et borne exacte)"
+            definition_period = MONTH
+
+            def formula_2019_01_01(individu, period, parameters):
+                retraite_brute = individu("retraite_brute", period)
+                _, _, est_med, est_plein = _compute_csg_retraite_masks(individu, period, parameters)
+                bareme = parameters(period).prelevements_sociaux.cotisations_securite_sociale_regime_general.casa
+                montant = (est_plein | est_med) * bareme.pensions_retraite_preretraite_invalidite.calc(retraite_brute)
+                return -montant
+
+        self.update_variable(csg_deductible_retraite)
+        self.update_variable(csg_imposable_retraite)
+        self.update_variable(crds_retraite)
+        self.update_variable(casa)
+
+
+class LoiEnVigueurBaseline(_BaseRetraitesReform):
+    """Enveloppe de la loi en vigueur portant les métadonnées d'audit et le lissage CSG/CASA exact."""
 
     name = "Loi en vigueur 2025 (CGI art. 158, 5-a — référence OpenFisca-France)"
     calc_certainty: CalcCertainty = "green"
@@ -111,11 +237,10 @@ class LoiEnVigueurBaseline(Reform):
         super().__init__(baseline)
 
     def apply(self) -> None:
-        # Loi en vigueur : aucune altération des paramètres ou variables de référence.
-        return None
+        super().apply()
 
 
-class PlafonnementAbattementRetraites3000(Reform):
+class PlafonnementAbattementRetraites3000(_BaseRetraitesReform):
     """PLF 2027 art. 3 : sous-plafond de 3 000 € par foyer sur les seules pensions de retraite.
 
     Les pensions alimentaires et pensions d'invalidité conservent le plafond de droit
@@ -136,6 +261,7 @@ class PlafonnementAbattementRetraites3000(Reform):
         super().__init__(baseline)
 
     def apply(self) -> None:
+        super().apply()
         start_year = self._start_year
 
         class indu_plaf_abat_pen(Variable):
@@ -180,7 +306,7 @@ class PlafonnementAbattementRetraites3000(Reform):
         self.update_variable(indu_plaf_abat_pen)
 
 
-class SuppressionAbattementRetraites10Pct(Reform):
+class SuppressionAbattementRetraites10Pct(_BaseRetraitesReform):
     """Suppression de l'abattement forfaitaire de 10 % sur les pensions.
 
     Par défaut (``scope="retraites_seules"``), la suppression est ciblée sur les seules
@@ -210,6 +336,7 @@ class SuppressionAbattementRetraites10Pct(Reform):
         super().__init__(baseline)
 
     def apply(self) -> None:
+        super().apply()
         if self.scope == "global_158_5_a":
             start_date = self._start_date
 
@@ -553,6 +680,46 @@ def _resolve_and_validate_metadata(
     return resolved_horizon, resolved_certainty, resolved_legal, resolved_source
 
 
+def _validate_specs_against_payload(payload: dict[str, Any], specs: list[HouseholdSpec]) -> None:
+    """Vérifie avant simulation l'existence et la cohérence exacte des membres (FoyerFiscal, Famille, Menage)."""
+    individus = payload.get("individus", {})
+    foyers = payload.get("foyers_fiscaux", {})
+    familles = payload.get("familles", {})
+    menages = payload.get("menages", {})
+
+    for spec in specs:
+        if spec.foyer_fiscal_id not in foyers:
+            raise ValueError(f"Foyer fiscal absent : {spec.foyer_fiscal_id}")
+        if spec.famille_id not in familles:
+            raise ValueError(f"Famille absente : {spec.famille_id}")
+        if spec.menage_id not in menages:
+            raise ValueError(f"Ménage absent : {spec.menage_id}")
+        for pid in spec.member_ids:
+            if pid not in individus:
+                raise ValueError(f"Individu absent : {pid}")
+
+        expected_members = set(spec.member_ids)
+        ff_data = foyers[spec.foyer_fiscal_id]
+        expected_ff = set(ff_data.get("declarants", [])) | set(ff_data.get("personnes_a_charge", []))
+        if expected_ff != expected_members:
+            raise ValueError(f"Incohérence membres FoyerFiscal pour {spec.household_id}")
+
+        fam_data = familles[spec.famille_id]
+        expected_fam = set(fam_data.get("parents", [])) | set(fam_data.get("enfants", []))
+        if expected_fam != expected_members:
+            raise ValueError(f"Incohérence membres Famille pour {spec.household_id}")
+
+        men_data = menages[spec.menage_id]
+        expected_men = (
+            set(men_data.get("personne_de_reference", []))
+            | set(men_data.get("conjoint", []))
+            | set(men_data.get("enfants", []))
+            | set(men_data.get("autres", []))
+        )
+        if expected_men != expected_members:
+            raise ValueError(f"Incohérence membres Menage pour {spec.household_id}")
+
+
 def evaluate_households(
     tax_benefit_system: TaxBenefitSystem,
     payload: dict[str, Any],
@@ -572,6 +739,7 @@ def evaluate_households(
         legal_status=legal_status,
         source_ref=source_ref,
     )
+    _validate_specs_against_payload(payload, specs)
 
     sim = SimulationBuilder().build_from_entities(tax_benefit_system, payload)
     sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
@@ -597,20 +765,9 @@ def evaluate_households(
 
     results: dict[str, HouseholdResult] = {}
     for spec in specs:
-        assert spec.foyer_fiscal_id in ff_index, f"Foyer fiscal absent : {spec.foyer_fiscal_id}"
-        assert spec.menage_id in men_index, f"Ménage absent : {spec.menage_id}"
-        for pid in spec.member_ids:
-            assert pid in person_index, f"Individu absent : {pid}"
-
         ff_idx = ff_index[spec.foyer_fiscal_id]
         men_idx = men_index[spec.menage_id]
         member_indices = [person_index[pid] for pid in spec.member_ids]
-
-        # Vérification stricte d'appartenance des membres au foyer attendu
-        expected_ff = set(payload["foyers_fiscaux"][spec.foyer_fiscal_id].get("declarants", [])) | set(
-            payload["foyers_fiscaux"][spec.foyer_fiscal_id].get("personnes_a_charge", [])
-        )
-        assert expected_ff == set(spec.member_ids), f"Incohérence membres FoyerFiscal pour {spec.household_id}"
 
         # En OpenFisca-France, l'IR et les prélèvements sociaux calculés sont négatifs.
         # L'addition `+ 0.0` normalise IEEE-754 `-0.0` en `0.0`.
