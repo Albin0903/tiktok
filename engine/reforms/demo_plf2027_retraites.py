@@ -12,7 +12,7 @@ Compare sur ``OpenFisca-France`` (année de référence 2025, ``max_spiral_loops
 Horizons temporels (``horizon``) :
   - ``"annee_1"`` : réforme appliquée uniquement à l'année courante 2025 (RFR N-2 de 2023
     inchangé → pas de bascule CSG immédiate).
-  - ``"regime_permanent"`` : réforme appliquée sur toute la fenêtre 2021..2025 pour
+  - ``"regime_permanent"`` : réforme appliquée sur toute la fenêtre 2016..2025 pour
     observer la boucle rétroactive ``RFR(N-2) -> taux CSG(N)``.
 
 Règle exacte et implémentation du lissage CSG / CASA (CSS art. L. 136-8, III) :
@@ -30,8 +30,22 @@ Règle exacte et implémentation du lissage CSG / CASA (CSS art. L. 136-8, III) 
     natif) :
       1. Borne exacte du taux plein : ``rfr >= seuil_rfr3`` (``26 004 €`` -> 8,3 %, au lieu de
          ``rfr > 26 004 €`` dans OpenFisca natif).
-      2. Lissage ``N-3 / N-2`` (pour ``N >= 2024``) : maintien au taux réduit (3,8 %) et
-         exonération de CASA lors du premier dépassement du seuil réduit si ``RFR(N-3) <= seuil_rfr2(N-1)``.
+      2. Lissage ``N-3 / N-2`` (applicable dès 2019) : maintien au taux réduit (3,8 %) et
+         exonération de CASA lors du premier dépassement du seuil réduit si ``RFR(N-3) <= seuil_rfr2(N)``.
+
+  Périmètre territorial :
+  - **France métropolitaine uniquement** (barèmes CSG métropole de l'annexe 2 de
+    l'Instruction DSS/2B/2024/184). ``evaluate_households()`` rejette les ménages dont
+    une résidence en DOM est renseignée durant l'année simulée ou l'historique
+    susceptible d'alimenter les RFR reconstruits.
+
+  Doctrine petites pensions mixtes (PLF 2027 art. 3) :
+  - Lorsqu'un même individu perçoit simultanément une retraite (``retraite_imposable > 0``)
+    et une pension alimentaire/d'invalidité modeste (``0 < autres_pensions < 4 540 €``, soit
+    ``10 % < 454 €``), le texte du projet de loi n'explicite pas l'imputation du plancher
+    de ``454 €``. Par convention, le plancher reste imputé à la part retraite, et
+    ``evaluate_households()`` bascule automatiquement ``calc_certainty`` à ``"yellow"``
+    pour ce foyer sous ``PlafonnementAbattementRetraites3000``.
 
 SOURCE: PLF 2027 AN n° 3210, art. 3 (déposé le 01/10/2026), https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw (Article 3 modifiant CGI art. 158, 5-a ; rejeté à l'AN le 04/11/2026, examen Sénat à partir du 20/11/2026).
 SOURCE: DGFiP Notice 2041-NOTFC 2026 (revenus 2025), https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf (Rubrique Pensions, retraites et rentes : abattement 10 %, min 454 € par pensionné, plafond 4 439 € par foyer fiscal).
@@ -50,6 +64,7 @@ import unicodedata
 if str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from numpy import floor, float64
 from openfisca_core.model_api import ADD, MONTH, YEAR, Variable, max_, min_, not_, round_, where
 from openfisca_core.reforms import Reform
 from openfisca_core.simulations import SimulationBuilder
@@ -99,9 +114,14 @@ def horizon_to_start_date(horizon: HorizonMode) -> str:
     if horizon == "annee_1":
         return f"{REFERENCE_YEAR}-01-01"
     if horizon == "regime_permanent":
-        # En régime permanent, la réforme s'applique sur toute la fenêtre historique N-4..N (2016..2025).
+        # En régime permanent, la réforme s'applique sur toute la fenêtre historique.
         return f"{HISTORY_YEARS[0]}-01-01"
     raise ValueError(f"Horizon inconnu : {horizon!r}")
+
+
+def _round_rfr_to_fiscal_euro(rfr: Any) -> Any:
+    # SOURCE: DGFiP, Brochure pratique 2026, p. 372 (CGI art. 193 et 1657-1), https://www.impots.gouv.fr/www2/fichiers/documentation/brochure/ir_2026/pdf_som/21-calcul_impot_369a382.pdf
+    return floor(rfr.astype(float64) + 0.5)
 
 
 def _compute_csg_retraite_masks(individu: Any, period: Any, parameters: Any) -> tuple[Any, Any, Any, Any]:
@@ -115,7 +135,7 @@ def _compute_csg_retraite_masks(individu: Any, period: Any, parameters: Any) -> 
          ``RFR(N-3) <= seuil_rfr2(N, nbptr_N_3)``, le pensionné reste au taux réduit (3,8 %)
          et exonéré de CASA lors du premier dépassement en ``N-2``.
     """
-    rfr_n_2 = individu.foyer_fiscal("rfr", period=period.n_2)
+    rfr_n_2 = _round_rfr_to_fiscal_euro(individu.foyer_fiscal("rfr", period=period.n_2))
     nbptr_n_2 = individu.foyer_fiscal("nbptr", period=period.n_2)
     params_n = parameters(period)
     seuils = params_n.prelevements_sociaux.contributions_sociales.csg.remplacement.seuils
@@ -131,7 +151,7 @@ def _compute_csg_retraite_masks(individu: Any, period: Any, parameters: Any) -> 
 
     # Lissage applicable sur toute la période >= 2019 : comparaison de RFR(N-3) au seuil de l'année N
     period_n_3 = period.offset(-1, "year").n_2
-    rfr_n_3 = individu.foyer_fiscal("rfr", period=period_n_3)
+    rfr_n_3 = _round_rfr_to_fiscal_euro(individu.foyer_fiscal("rfr", period=period_n_3))
     nbptr_n_3 = individu.foyer_fiscal("nbptr", period=period_n_3)
     seuil_red_n_3 = seuils.seuil_rfr2.seuil_rfr2 + (nbptr_n_3 - 1) * 2 * seuils.seuil_rfr2.demi_part_suppl_rfr2
 
@@ -282,7 +302,7 @@ class PlafonnementAbattementRetraites3000(_BaseRetraitesReform):
 
                 retraite_i = foyer_fiscal.members("retraite_imposable", period, options=[ADD])
                 pa_i = foyer_fiscal.members("pensions_alimentaires_percues", period, options=[ADD])
-                pa_decl_i = foyer_fiscal.members("pensions_alimentaires_percues_decl", period, options=[ADD])
+                pa_decl_i = foyer_fiscal.members("pensions_alimentaires_percues_decl", period)
                 inv_i = foyer_fiscal.members("pensions_invalidite", period, options=[ADD])
                 autres_i = pa_i * pa_decl_i + inv_i
 
@@ -326,6 +346,10 @@ class SuppressionAbattementRetraites10Pct(_BaseRetraitesReform):
         horizon: HorizonMode = "annee_1",
         scope: SuppressionScope = "retraites_seules",
     ) -> None:
+        if scope not in ("retraites_seules", "global_158_5_a"):
+            raise ValueError(
+                f"Scope invalide : {scope!r}. Valeurs autorisées : 'retraites_seules', 'global_158_5_a'."
+            )
         self.horizon: HorizonMode = horizon
         self.scope: SuppressionScope = scope
         self._start_date = horizon_to_start_date(horizon)
@@ -368,7 +392,7 @@ class SuppressionAbattementRetraites10Pct(_BaseRetraitesReform):
 
                 retraite_imposable = individu("retraite_imposable", period, options=[ADD])
                 pa = individu("pensions_alimentaires_percues", period, options=[ADD])
-                pa_decl = individu("pensions_alimentaires_percues_decl", period, options=[ADD])
+                pa_decl = individu("pensions_alimentaires_percues_decl", period)
                 pensions_invalidite = individu("pensions_invalidite", period, options=[ADD])
                 autres_pensions = pa * pa_decl + pensions_invalidite
 
@@ -389,7 +413,7 @@ class HouseholdResult(BaseModel):
       - ``ir_paye`` >= 0 : impôt sur le revenu payé (opposé de ``impot_revenu_restant_a_payer``).
       - ``csg_retraite`` >= 0 : CSG totale sur pensions (déductible + imposable).
       - ``prelevements_sociaux_retraite`` >= 0 : CSG + CRDS + CASA sur pensions.
-      - ``rfr_n_2`` : RFR de 2023 utilisé par OpenFisca pour le taux CSG retraites 2025.
+      - ``rfr_n_2`` : RFR de 2023, arrondi fiscalement par le socle retraites pour la CSG 2025.
       - ``rfr`` : RFR de 2025.
       - ``revenu_disponible`` : variable OpenFisca ``revenu_disponible`` (Menage, YEAR).
     """
@@ -743,10 +767,29 @@ def evaluate_households(
     sim = SimulationBuilder().build_from_entities(tax_benefit_system, payload)
     sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
 
-    n_2_period = str(int(period) - 2)
+    simulation_year = int(period)
+    n_2_period = str(simulation_year - 2)
+    men_index = {mid: idx for idx, mid in enumerate(sim.menage.ids)}
+    # SOURCE: Instruction DSS/2B/2024/184, annexe 2, p. 4, https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf
+    # La résidence N-2 détermine le barème des deux RFR, y compris lors du calcul
+    # des pensions historiques qui alimentent les RFR reconstruits.
+    history_start = min(int(HISTORY_YEARS[0]), int(n_2_period))
+    for year in range(history_start, simulation_year + 1):
+        for month in range(1, 13):
+            month_period = f"{year}-{month:02d}"
+            residence_dom = sim.calculate("residence_dom", month_period)
+            for spec in specs:
+                if residence_dom[men_index[spec.menage_id]]:
+                    raise ValueError(
+                        f"Périmètre métropole uniquement : le ménage {spec.household_id!r} "
+                        f"a une résidence en DOM en {month_period}."
+                    )
+
     ir_arr = sim.calculate("impot_revenu_restant_a_payer", period)
     rfr_arr = sim.calculate("rfr", period)
     rfr_n_2_arr = sim.calculate("rfr", n_2_period)
+    if isinstance(tax_benefit_system, _BaseRetraitesReform):
+        rfr_n_2_arr = _round_rfr_to_fiscal_euro(rfr_n_2_arr)
     rev_disp_arr = sim.calculate("revenu_disponible", period)
 
     csg_ded = sim.calculate_add("csg_deductible_retraite", period)
@@ -758,15 +801,39 @@ def evaluate_households(
     pensions_inv = sim.calculate_add("pensions_invalidite", period)
     salaire_brut = sim.calculate_add("salaire_de_base", period)
 
+    mixed_pension_minimum = None
+    if resolved_certainty == "green" and isinstance(tax_benefit_system, PlafonnementAbattementRetraites3000):
+        # Une convention appliquée aux pensions historiques peut modifier les RFR reconstruits.
+        for year in range(tax_benefit_system._start_year, simulation_year + 1):
+            pension_period = str(year)
+            retraite_imp = sim.calculate_add("retraite_imposable", pension_period)
+            pa_decl = sim.calculate("pensions_alimentaires_percues_decl", pension_period)
+            pa = sim.calculate_add("pensions_alimentaires_percues", pension_period)
+            invalidite = sim.calculate_add("pensions_invalidite", pension_period)
+            autres_pensions_imposables = pa * pa_decl + invalidite
+            abatpen = tax_benefit_system.parameters(pension_period).impot_revenu.calcul_revenus_imposables.deductions.abatpen
+            mixed_in_year = (
+                (retraite_imp > 0)
+                & (autres_pensions_imposables > 0)
+                & (autres_pensions_imposables * abatpen.taux < abatpen.min)
+            )
+            if mixed_pension_minimum is None:
+                mixed_pension_minimum = mixed_in_year
+            else:
+                mixed_pension_minimum |= mixed_in_year
+
     person_index = {pid: idx for idx, pid in enumerate(sim.individu.ids)}
     ff_index = {fid: idx for idx, fid in enumerate(sim.foyer_fiscal.ids)}
-    men_index = {mid: idx for idx, mid in enumerate(sim.menage.ids)}
 
     results: dict[str, HouseholdResult] = {}
     for spec in specs:
         ff_idx = ff_index[spec.foyer_fiscal_id]
         men_idx = men_index[spec.menage_id]
         member_indices = [person_index[pid] for pid in spec.member_ids]
+
+        household_certainty: CalcCertainty = resolved_certainty
+        if mixed_pension_minimum is not None and mixed_pension_minimum[member_indices].any():
+            household_certainty = "yellow"
 
         # En OpenFisca-France, l'IR et les prélèvements sociaux calculés sont négatifs.
         # L'addition `+ 0.0` normalise IEEE-754 `-0.0` en `0.0`.
@@ -788,7 +855,7 @@ def evaluate_households(
             label=spec.label,
             scenario=scenario_name,
             horizon=resolved_horizon,
-            calc_certainty=resolved_certainty,
+            calc_certainty=household_certainty,
             legal_status=resolved_legal,
             source_ref=resolved_source,
             pension_brute_annuelle=pens_brute,
@@ -928,7 +995,7 @@ def main() -> int:
         titre_h = (
             "EFFET ANNÉE 1 (2025 seul, RFR N-2 figé)"
             if horizon == "annee_1"
-            else "RÉGIME PERMANENT (2021..2025, rétroaction RFR N-2 -> CSG)"
+            else f"RÉGIME PERMANENT ({HISTORY_YEARS[0]}..{REFERENCE_YEAR}, rétroaction RFR N-2 -> CSG)"
         )
         _emit(f"\n=== VERITE FISCALE 2027 :: DEMO PLF RETRAITES [{titre_h}] ===\n")
         _emit(format_comparison_table(suite["retirees"], horizon=horizon, ascii_safe=use_ascii))

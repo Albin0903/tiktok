@@ -47,6 +47,7 @@ from engine.reforms.demo_plf2027_retraites import (
     LoiEnVigueurBaseline,
     PlafonnementAbattementRetraites3000,
     SuppressionAbattementRetraites10Pct,
+    _spec,
     build_active_control_households_payload,
     build_retiree_households_payload,
     evaluate_households,
@@ -206,7 +207,7 @@ def test_csg_exact_boundary_26004_taux_plein() -> None:
     tbs = get_tax_benefit_system()
     sys_exact = LoiEnVigueurBaseline(tbs, horizon="regime_permanent")
 
-    def _run_at_rfr2023(rfr_2023_target: float) -> float:
+    def _payload_at_rfr2023(rfr_2023_target: float, parts: float = 1.0) -> dict[str, Any]:
         payload = {
             "individus": {
                 "ind_b": {
@@ -218,22 +219,47 @@ def test_csg_exact_boundary_26004_taux_plein() -> None:
                 "ff_b": {
                     "declarants": ["ind_b"],
                     "rfr": {"2022": 20000.0, "2023": rfr_2023_target},
+                    "nbptr": {"2023": parts},
                 }
             },
             "familles": {"fam_b": {"parents": ["ind_b"]}},
             "menages": {"men_b": {"personne_de_reference": ["ind_b"]}},
         }
-        sim = SimulationBuilder().build_from_entities(sys_exact, payload)
+        return payload
+
+    for rfr, taux in (
+        (12817.49, 0.0),
+        (12817.50, 0.038),
+        (16755.49, 0.038),
+        (16755.50, 0.066),
+        (26003.49, 0.066),
+        (26003.50, 0.083),
+        (26003.60, 0.083),
+        (26004.00, 0.083),
+    ):
+        sim = SimulationBuilder().build_from_entities(sys_exact, _payload_at_rfr2023(rfr))
         sim.max_spiral_loops = DEFAULT_MAX_SPIRAL_LOOPS
-        return float(
-            -(sim.calculate_add("csg_deductible_retraite", "2025")[0] + sim.calculate_add("csg_imposable_retraite", "2025")[0])
-        )
+        csg = -(sim.calculate_add("csg_deductible_retraite", "2025")[0] + sim.calculate_add("csg_imposable_retraite", "2025")[0])
+        assert csg == pytest.approx(28800.0 * taux, abs=0.2), rfr
 
-    assert _run_at_rfr2023(26003.0) == pytest.approx(28800.0 * 0.066, abs=0.2)
-    assert _run_at_rfr2023(26004.0) == pytest.approx(28800.0 * 0.083, abs=0.2)
+    # Le seuil à 1,5 part est de 32 945 €. Un arrondi au pair donnerait 32 944 €.
+    result = evaluate_households(
+        sys_exact,
+        _payload_at_rfr2023(32944.50, parts=1.5),
+        [_spec("b", "Foyer de 1,5 part", ("ind_b",))],
+        scenario_name="base",
+    )["b"]
+    assert result.rfr_n_2 == 32945.0
+    assert result.csg_retraite == pytest.approx(28800.0 * 0.083, abs=0.2)
 
 
-def test_csg_smoothing_uses_year_n_threshold_for_rfr_n_3() -> None:
+@pytest.mark.parametrize(
+    ("rfr_n_3", "taux_csg", "taux_casa"),
+    [(16300.0, 0.038, 0.0), (16755.49, 0.038, 0.0), (16755.50, 0.066, 0.003)],
+)
+def test_csg_smoothing_uses_year_n_threshold_for_rfr_n_3(
+    rfr_n_3: float, taux_csg: float, taux_casa: float
+) -> None:
     """Non-régression [P1] : RFR(N-3) est comparé au seuil de l'année N (16 755 € en 2025).
 
     Cas exact : 1 part, RFR 2022 = 16 300 € (> 15 988 € de N-1 mais <= 16 755 € de 2025),
@@ -251,7 +277,7 @@ def test_csg_smoothing_uses_year_n_threshold_for_rfr_n_3() -> None:
         "foyers_fiscaux": {
             "ff_n3": {
                 "declarants": ["ind_n3"],
-                "rfr": {"2022": 16300.0, "2023": 18000.0},
+                "rfr": {"2022": rfr_n_3, "2023": 18000.0},
             }
         },
         "familles": {"fam_n3": {"parents": ["ind_n3"]}},
@@ -263,8 +289,8 @@ def test_csg_smoothing_uses_year_n_threshold_for_rfr_n_3() -> None:
         -(sim.calculate_add("csg_deductible_retraite", "2025")[0] + sim.calculate_add("csg_imposable_retraite", "2025")[0])
     )
     casa_2025 = float(-sim.calculate_add("casa", "2025")[0])
-    assert csg_2025 == pytest.approx(684.0, abs=0.2)
-    assert casa_2025 == 0.0
+    assert csg_2025 == pytest.approx(18000.0 * taux_csg, abs=0.2)
+    assert casa_2025 == pytest.approx(18000.0 * taux_casa, abs=0.01)
 
 
 def test_csg_smoothing_active_before_2024() -> None:
@@ -442,6 +468,101 @@ def test_evaluate_households_mismatched_menage_raises() -> None:
     }
     with pytest.raises(ValueError, match="Incohérence membres Menage"):
         evaluate_households(baseline_sys, corrupted_payload, specs, scenario_name="base")
+
+
+@pytest.mark.parametrize(
+    ("depcom", "month"),
+    [
+        ({"2025": "97105"}, "2025-01"),
+        ({"2023": "97105", "2025": "75056"}, "2023-01"),
+        ({"2023-12": "97105", "2025": "75056"}, "2023-12"),
+        ({"2025-07": "97105"}, "2025-07"),
+        ({"2021": "97105", "2023": "75056", "2025": "75056"}, "2021-01"),
+    ],
+)
+def test_ultramarine_residence_raises_value_error(depcom: dict[str, str], month: str) -> None:
+    """Vérifie le rejet explicite des résidents ultramarins (périmètre métropole uniquement)."""
+    tbs = get_tax_benefit_system()
+    sys_exact = LoiEnVigueurBaseline(tbs, horizon="regime_permanent")
+    payload = {
+        "individus": {
+            "ind_dom": {
+                "date_naissance": {"ETERNITY": "1962-01-01"},
+                "retraite_brute": {year: 18000.0 for year in HISTORY_YEARS},
+            }
+        },
+        "foyers_fiscaux": {
+            "ff_dom": {
+                "declarants": ["ind_dom"],
+            }
+        },
+        "familles": {"fam_dom": {"parents": ["ind_dom"]}},
+        "menages": {"men_dom": {"personne_de_reference": ["ind_dom"], "depcom": depcom}},
+    }
+    specs = [_spec("dom", "Guadeloupe 97105", ("ind_dom",))]
+    with pytest.raises(ValueError, match=f"Périmètre métropole uniquement.*{month}"):
+        evaluate_households(sys_exact, payload, specs, scenario_name="base")
+
+
+def test_suppression_invalid_scope_raises_value_error() -> None:
+    """Vérifie qu'un scope invalide (ex. typo 'global_158_5a') lève immédiatement ValueError."""
+    tbs = get_tax_benefit_system()
+    with pytest.raises(ValueError, match="Scope invalide"):
+        SuppressionAbattementRetraites10Pct(tbs, horizon="annee_1", scope="global_158_5a")  # type: ignore[arg-type]
+
+
+def test_mixed_small_pension_triggers_yellow_certainty() -> None:
+    """Vérifie la doctrine petites pensions mixtes : déclassement automatique en calc_certainty='yellow'."""
+    tbs = get_tax_benefit_system()
+    plaf_sys = PlafonnementAbattementRetraites3000(tbs, horizon="annee_1")
+
+    # Cas 1 : petite pension mixte (2 000 € retraite + 2 000 € pension alimentaire -> 10 % < 454 €)
+    payload_small = {
+        "individus": {
+            "ind_mix_small": {
+                "date_naissance": {"ETERNITY": "1958-01-01"},
+                "retraite_brute": {y: 2000.0 for y in HISTORY_YEARS},
+                "pensions_alimentaires_percues": {y: 2000.0 for y in HISTORY_YEARS},
+            }
+        },
+        "foyers_fiscaux": {"ff_mix_small": {"declarants": ["ind_mix_small"]}},
+        "familles": {"fam_mix_small": {"parents": ["ind_mix_small"]}},
+        "menages": {"men_mix_small": {"personne_de_reference": ["ind_mix_small"]}},
+    }
+    res_small = evaluate_households(
+        plaf_sys,
+        payload_small,
+        [_spec("mix_small", "Petite pension mixte", ("ind_mix_small",))],
+        scenario_name="plafond_3000",
+    )
+    assert res_small["mix_small"].calc_certainty == "yellow"
+    assert res_small["mix_small"].ir_paye == 0.0
+
+    payload_small["individus"]["ind_mix_small"]["pensions_alimentaires_percues_decl"] = {"2025": False}
+    res_non_decl = evaluate_households(
+        plaf_sys,
+        payload_small,
+        [_spec("mix_small", "Petite pension mixte", ("ind_mix_small",))],
+        scenario_name="plafond_3000",
+    )
+    assert res_non_decl["mix_small"].calc_certainty == "green"
+
+    # Cas 2 : grande pension mixte (36 000 € + 10 000 €) -> non ambigu, reste 'green'
+    active_payload, active_specs = build_active_control_households_payload()
+    res_large = evaluate_households(plaf_sys, active_payload, active_specs, scenario_name="plafond_3000")
+    assert res_large["mixte_retraite_pension_alim"].calc_certainty == "green"
+
+    # En régime permanent, le sous-plafond est atteint en 2023 et le RFR
+    # reconstruit dépend de l'imputation du minimum à la pension mixte.
+    active_payload["individus"]["ind_mixte_1"]["pensions_alimentaires_percues"] = {"2023": 2000.0}
+    plaf_permanent = PlafonnementAbattementRetraites3000(tbs, horizon="regime_permanent")
+    res_historic = evaluate_households(
+        plaf_permanent,
+        active_payload,
+        active_specs,
+        scenario_name="plafond_3000",
+    )
+    assert res_historic["mixte_retraite_pension_alim"].calc_certainty == "yellow"
 
 
 def test_external_dgfip_2042_analytical_cross_check(

@@ -9,8 +9,8 @@
       "https://www.impots.gouv.fr/sites/default/files/formulaires/2041-notfc/2026/2041-notfc_5516.pdf",
       "https://legislation.lassuranceretraite.fr/Pdf/instruction_ministerielle_04122024.pdf"
     ],
-    "page": 1,
-    "exact_quote": "Le plafond annuel de l'abattement de 10 % prévu au a du 5 de l'article 158 du CGI (4 439 € sur les revenus 2025, min 454 € par pensionné) est ramené à 3 000 € par foyer fiscal pour les seules pensions de retraite ; les pensions alimentaires et d'invalidité restent soumises au plafond de droit commun."
+    "location": "Article 3, alinéa (2), version HTML",
+    "exact_quote": ", dont 3 000 € au maximum au titre des pensions de retraites"
   },
   "calc_certainty": "green",
   "legal_status": "projet_de_loi_en_navette",
