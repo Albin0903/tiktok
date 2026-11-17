@@ -7,12 +7,16 @@ dependencies = [
     "openfisca-france>=177.0.0",
     "polars>=2.0.0",
     "duckdb>=2.0.0",
+    "fastapi>=0.163.1",
     "httpx>=0.28.0",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
     "pydantic>=2.10.0",
     "pytest>=9.0.0",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "engine"]
-testpaths = ["engine/tests"]
+testpaths = ["engine/tests", "api/tests"]
 addopts = "-ra"

@@ -1,0 +1,22 @@
+{
+  "name": "verite-fiscale-video",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "preflight": "node render.mjs --preflight",
+    "render": "node render.mjs"
+  },
+  "dependencies": {
+    "@fontsource/jetbrains-mono": "^5.2.6",
+    "@fontsource/space-grotesk": "^5.2.10",
+    "@remotion/player": "4.0.544",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "remotion": "4.0.544"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.57.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0"
+  }
+}

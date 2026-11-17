@@ -274,9 +274,16 @@ class PlafonnementAbattementRetraites3000(_BaseRetraitesReform):
         "https://www.assemblee-nationale.fr/dyn/docs/PRJLANR5L17B3210.raw"
     )
 
-    def __init__(self, baseline: TaxBenefitSystem, horizon: HorizonMode = "annee_1") -> None:
+    def __init__(
+        self,
+        baseline: TaxBenefitSystem,
+        horizon: HorizonMode = "annee_1",
+        *,
+        first_year: int | None = None,
+    ) -> None:
         self.horizon: HorizonMode = horizon
-        self._start_year = int(horizon_to_start_date(horizon)[:4])
+        default_year = int(horizon_to_start_date(horizon)[:4])
+        self._start_year = default_year if first_year is None else first_year
         super().__init__(baseline)
 
     def apply(self) -> None:
